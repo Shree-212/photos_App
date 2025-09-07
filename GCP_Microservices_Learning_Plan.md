@@ -40,7 +40,7 @@
 ### Week 3: Building Your First Microservice
 - [ ] **Day 1-2: Project Setup**
   - Create a simple Task Manager API
-  - Set up Node.js/Express or Python/FastAPI
+  - Set up Node.js/Express.
   - Implement basic CRUD operations
   - Add input validation
 
