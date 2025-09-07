@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: task-manager
+data:
+  db-host: "postgres-service"
+  db-name: "taskmanager"
+  redis-url: "redis://redis-service:6379"
+  auth-service-url: "http://auth-service:80"
+  task-service-url: "http://task-service:80"
+  cors-origin: "https://your-frontend-domain.com"

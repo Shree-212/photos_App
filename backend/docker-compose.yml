@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: taskmanager
+      POSTGRES_USER: taskuser
+      POSTGRES_PASSWORD: taskpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - task-manager-network
+
+  redis:
+    image: redis:6-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - task-manager-network
+
+  auth-service:
+    build: ./services/auth-service
+    ports:
+      - "3001:3001"
+    environment:
+      DB_HOST: postgres
+      DB_NAME: taskmanager
+      DB_USER: taskuser
+      DB_PASSWORD: taskpassword
+      JWT_SECRET: your-jwt-secret-key-change-in-production
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: development
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - task-manager-network
+    volumes:
+      - ./services/auth-service:/app
+      - /app/node_modules
+
+  task-service:
+    build: ./services/task-service
+    ports:
+      - "3002:3002"
+    environment:
+      DB_HOST: postgres
+      DB_NAME: taskmanager
+      DB_USER: taskuser
+      DB_PASSWORD: taskpassword
+      AUTH_SERVICE_URL: http://auth-service:3001
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: development
+    depends_on:
+      - postgres
+      - auth-service
+      - redis
+    networks:
+      - task-manager-network
+    volumes:
+      - ./services/task-service:/app
+      - /app/node_modules
+
+  api-gateway:
+    build: ./services/api-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:3001
+      TASK_SERVICE_URL: http://task-service:3002
+      NODE_ENV: development
+      CORS_ORIGIN: http://localhost:3100
+    depends_on:
+      - auth-service
+      - task-service
+    networks:
+      - task-manager-network
+    volumes:
+      - ./services/api-gateway:/app
+      - /app/node_modules
+
+volumes:
+  postgres_data:
+
+networks:
+  task-manager-network:
+    driver: bridge

@@ -1,0 +1,108 @@
+steps:
+  # Build and push Docker images
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-auth-service'
+    args:
+    - 'build'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/auth-service:$BUILD_ID'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/auth-service:latest'
+    - './services/auth-service'
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-task-service'
+    args:
+    - 'build'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/task-service:$BUILD_ID'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/task-service:latest'
+    - './services/task-service'
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-api-gateway'
+    args:
+    - 'build'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/api-gateway:$BUILD_ID'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/api-gateway:latest'
+    - './services/api-gateway'
+
+  # Push images to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-auth-service'
+    args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/auth-service:$BUILD_ID'
+    waitFor: ['build-auth-service']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-auth-service-latest'
+    args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/auth-service:latest'
+    waitFor: ['build-auth-service']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-task-service'
+    args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/task-service:$BUILD_ID'
+    waitFor: ['build-task-service']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-task-service-latest'
+    args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/task-service:latest'
+    waitFor: ['build-task-service']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-api-gateway'
+    args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/api-gateway:$BUILD_ID'
+    waitFor: ['build-api-gateway']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-api-gateway-latest'
+    args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/api-gateway:latest'
+    waitFor: ['build-api-gateway']
+
+  # Deploy to GKE
+  - name: 'gcr.io/cloud-builders/gke-deploy'
+    id: 'deploy-to-gke'
+    args:
+    - run
+    - --filename=k8s/
+    - --cluster=task-manager-cluster
+    - --location=us-central1-a
+    - --namespace=task-manager
+    waitFor: 
+    - 'push-auth-service-latest'
+    - 'push-task-service-latest'
+    - 'push-api-gateway-latest'
+
+# Store build logs
+options:
+  logging: CLOUD_LOGGING_ONLY
+  logStreamingOption: STREAM_ON
+  substitution_option: ALLOW_LOOSE
+
+# Substitutions
+substitutions:
+  _CLUSTER_LOCATION: us-central1-a
+  _CLUSTER_NAME: task-manager-cluster
+
+# Timeout
+timeout: 1200s
+
+# Tags for build identification
+tags:
+- 'task-manager'
+- 'microservices'
+- 'gke-deployment'
