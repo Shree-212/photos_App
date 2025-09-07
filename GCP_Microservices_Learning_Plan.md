@@ -1,4 +1,4 @@
-# GCP Microservices Learning Plan for Property Listing Application
+# GCP Microservices Learning Plan
 
 ## Phase 1: Foundation (Week 1-2)
 
@@ -217,10 +217,9 @@
 - [ ] Set up CI/CD pipeline for automated deployments
 
 ## Next Steps After Completion:
-1. Implement the full property listing application
+1. build a frontend application on next ,which uses the functionalities extended by the microservices of the test project ,and see how everything works.
 2. Add advanced features like real-time notifications
 3. Implement data analytics and reporting
 4. Optimize for performance and cost
-5. Add machine learning features for property recommendations
 
 This learning plan will take you from GCP basics to building production-ready microservices, with hands-on experience through the test project that directly applies to your property listing application.
