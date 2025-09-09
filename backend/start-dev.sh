@@ -55,7 +55,7 @@ check_files() {
 install_dependencies() {
     print_status "Installing dependencies for all services..."
     
-    services=("auth-service" "task-service" "media-service" "api-gateway")
+    services=("auth-service" "task-service" "media-service" "api-gateway" "notification-service")
     
     for service in "${services[@]}"; do
         if [ -d "services/$service" ]; then
@@ -207,6 +207,25 @@ wait_for_services() {
     else
         print_warning "API Gateway not ready after 60 seconds, but continuing..."
     fi
+
+    # Wait for notification service
+    print_status "Waiting for Notification Service..."
+    local notification_ready=false
+    for i in {1..60}; do
+        if curl -s http://localhost:3004/health >/dev/null 2>&1; then
+            notification_ready=true
+            break
+        fi
+        sleep 1
+        echo -n "."
+    done
+    echo ""
+    
+    if [ "$notification_ready" = true ]; then
+        print_status "Notification Service is ready ✓"
+    else
+        print_warning "Notification Service not ready after 60 seconds, but continuing..."
+    fi
 }
 
 # Show service status
@@ -219,6 +238,7 @@ show_status() {
     echo "  🔐 Auth Service:    http://localhost:3001"
     echo "  📋 Task Service:    http://localhost:3002"
     echo "  🖼️  Media Service:   http://localhost:3003"
+    echo "  📧 Notification Service: http://localhost:3004"
     echo "  🌐 API Gateway:     http://localhost:3000"
     echo "  📚 API Docs:        http://localhost:3000/api/docs"
     echo "  🗄️  PostgreSQL:     localhost:5432"
@@ -233,7 +253,7 @@ show_status() {
     echo ""
     print_status "View logs:"
     echo "  docker-compose logs -f [service-name]"
-    echo "  Services: auth-service, task-service, media-service, api-gateway, postgres, redis, pubsub-emulator"
+    echo "  Services: auth-service, task-service, media-service, notification-service, api-gateway, postgres, redis, pubsub-emulator"
     
     echo ""
     print_status "Stop services:"
@@ -269,7 +289,7 @@ main() {
         docker-compose ps
         print_status "You can check individual service logs with:"
         print_status "  docker-compose logs [service-name]"
-        print_status "  Available services: auth-service, task-service, media-service, api-gateway, postgres, redis"
+        print_status "  Available services: auth-service, task-service, media-service, notification-service, api-gateway, postgres, redis"
         exit 1
     fi
 }

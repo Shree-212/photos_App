@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 const winston = require('winston');
 const CircuitBreaker = require('opossum');
 const axios = require('axios');
+const { SimpleTracingManager } = require('../lib/simple-tracing');
 require('dotenv').config();
 
 const app = express();
@@ -29,11 +30,15 @@ const logger = winston.createLogger({
   ],
 });
 
+// Initialize tracing manager
+const tracingManager = new SimpleTracingManager('api-gateway', logger);
+
 // Service URLs
 const services = {
   auth: process.env.AUTH_SERVICE_URL || 'http://auth-service:3001',
   task: process.env.TASK_SERVICE_URL || 'http://task-service:3002',
-  media: process.env.MEDIA_SERVICE_URL || 'http://media-service:3003'
+  media: process.env.MEDIA_SERVICE_URL || 'http://media-service:3003',
+  notification: process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3004'
 };
 
 // Circuit breaker options
@@ -79,6 +84,7 @@ const createServiceCall = (serviceName) => {
 const authCircuitBreaker = createServiceCall('auth-service');
 const taskCircuitBreaker = createServiceCall('task-service');
 const mediaCircuitBreaker = createServiceCall('media-service');
+const notificationCircuitBreaker = createServiceCall('notification-service');
 
 // Middleware
 app.use(helmet());
@@ -102,6 +108,9 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
+
+// Add tracing middleware early
+app.use(tracingManager.createExpressMiddleware());
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -335,6 +344,15 @@ const createExpressProxy = (target, circuitBreaker = null) => {
         }
       }
       
+      // For notification service, req.url is already stripped, keep /api/notifications prefix
+      if (req.originalUrl.startsWith('/api/notifications')) {
+        newPath = '/api/notifications' + req.url;
+        // Handle root path case
+        if (newPath === '/api/notifications/') {
+          newPath = '/api/notifications';
+        }
+      }
+      
       logger.info('Path resolver output:', {
         originalUrl: req.originalUrl,
         reqUrl: req.url,
@@ -542,6 +560,29 @@ app.use('/api/media',
       return createEnhancedProxy(services.media, {
         '^/api/media': '/media'
       }, mediaCircuitBreaker)(req, res, next);
+    }
+  }
+);
+
+// Notification service routes  
+app.use('/api/notifications',
+  withCircuitBreaker(notificationCircuitBreaker, 'notification-service'),
+  (req, res, next) => {
+    logger.debug('Routing to notification service:', {
+      method: req.method,
+      originalUrl: req.originalUrl,
+      path: req.path
+    });
+    
+    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+      // Use express-http-proxy for JSON requests with body
+      const expressProxy = createExpressProxy(services.notification, notificationCircuitBreaker);
+      return expressProxy(req, res, next);
+    } else {
+      // Use http-proxy-middleware for GET requests
+      return createEnhancedProxy(services.notification, {
+        '^/api/notifications': '/api/notifications'
+      }, notificationCircuitBreaker)(req, res, next);
     }
   }
 );
@@ -778,7 +819,7 @@ app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
     message: `The requested endpoint ${req.method} ${req.originalUrl} was not found`,
-    availableEndpoints: ['/api/auth/*', '/api/tasks/*', '/api/media/*', '/media/*', '/health', '/api'],
+    availableEndpoints: ['/api/auth/*', '/api/tasks/*', '/api/media/*', '/api/notifications/*', '/media/*', '/health', '/api'],
     timestamp: new Date().toISOString()
   });
 });

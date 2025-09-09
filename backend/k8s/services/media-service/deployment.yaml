@@ -17,6 +17,125 @@ spec:
         app: media-service
         version: v1
     spec:
+      containers:
+      - name: media-service
+        image: gcr.io/PROJECT_ID/media-service:latest
+        ports:
+        - containerPort: 3003
+          name: http
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: db-host
+        - name: DB_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: db-name
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: db-secret
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secret
+              key: password
+        - name: AUTH_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: auth-service-url
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: redis-url
+        - name: GOOGLE_CLOUD_PROJECT
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: gcp-project-id
+        - name: GCS_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: gcs-bucket
+        - name: PUBSUB_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: pubsub-topic
+        - name: USE_LOCAL_STORAGE
+          value: "false"
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: log-level
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: "/etc/gcp/service-account.json"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3003
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3003
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: gcp-service-account
+          mountPath: /etc/gcp
+          readOnly: true
+      volumes:
+      - name: gcp-service-account
+        secret:
+          secretName: google-cloud-key
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: media-service
+  namespace: task-manager
+  labels:
+    app: media-service
+spec:
+  selector:
+    app: media-service
+  ports:
+  - port: 80
+    targetPort: 3003
+    name: http
+  type: ClusterIP
       serviceAccountName: task-manager-service-account
       containers:
       - name: media-service

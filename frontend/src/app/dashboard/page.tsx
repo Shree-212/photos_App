@@ -8,6 +8,7 @@ import { TaskCard } from '../../components/TaskCard';
 import { MediaManager } from '../../components/MediaManager';
 import { Plus, Search, Filter, Grid, List, Upload, LogOut } from 'lucide-react';
 import api from '../../lib/auth';
+import { taskApi } from '../../lib/tasks';
 import toast from 'react-hot-toast';
 import { Task, MediaFile, CreateTaskData, UpdateTaskData } from '../../types';
 
@@ -39,20 +40,20 @@ export default function DashboardPage() {
 
   // Filter and sort tasks when dependencies change
   useEffect(() => {
-    let filtered = [...tasks];
+    let filtered = [...tasks].filter(task => task && typeof task === 'object');
 
     // Apply search filter
     if (searchQuery) {
       filtered = filtered.filter(
         task =>
-          task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          task.description?.toLowerCase().includes(searchQuery.toLowerCase())
+          task?.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          task?.description?.toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
 
     // Apply status filter
     if (filterStatus !== 'all') {
-      filtered = filtered.filter(task => task.status === filterStatus);
+      filtered = filtered.filter(task => task?.status === filterStatus);
     }
 
     // Apply sorting
@@ -85,12 +86,13 @@ export default function DashboardPage() {
       setLoading(true);
       console.log('Fetching tasks through API Gateway...');
 
-      // Use the API Gateway endpoint with auth headers automatically included
-      const response = await api.get('/api/tasks');
+      // Use the taskApi to get tasks with proper typing
+      const response = await taskApi.getTasks();
       
-      console.log('Tasks response:', response.data);
-      const tasksData = response.data.data || response.data;
-      setTasks(Array.isArray(tasksData) ? tasksData : []);
+      console.log('Tasks response:', response);
+      const tasksData = response.tasks || [];
+      const validTasks = Array.isArray(tasksData) ? tasksData.filter(task => task && typeof task === 'object' && task.status) : [];
+      setTasks(validTasks);
     } catch (error: any) {
       console.error('Failed to fetch tasks:', error);
       if (error.response?.status === 401) {
@@ -107,8 +109,8 @@ export default function DashboardPage() {
 
   const handleCreateTask = async (taskData: CreateTaskData) => {
     try {
-      const response = await api.post('/api/tasks', taskData);
-      const newTask = response.data.data || response.data;
+      const response = await taskApi.createTask(taskData);
+      const newTask = response.task;
       setTasks(prev => [newTask, ...prev]);
       setShowTaskForm(false);
       toast.success('Task created successfully');
@@ -124,9 +126,9 @@ export default function DashboardPage() {
 
     try {
       console.log('Updating task with data:', taskData);
-      const response = await api.put(`/api/tasks/${editingTask.id}`, taskData);
-      console.log('Update response:', response.data);
-      const updatedTask = response.data.data || response.data;
+      const response = await taskApi.updateTask(editingTask.id, taskData);
+      console.log('Update response:', response);
+      const updatedTask = response.task;
       setTasks(prev => prev.map(task => task.id === editingTask.id ? updatedTask : task));
       setEditingTask(null);
       setShowTaskForm(false);
@@ -152,7 +154,7 @@ export default function DashboardPage() {
     if (!confirm('Are you sure you want to delete this task?')) return;
 
     try {
-      await api.delete(`/api/tasks/${taskId}`);
+      await taskApi.deleteTask(taskId);
       setTasks(prev => prev.filter(task => task.id !== taskId));
       toast.success('Task deleted successfully');
     } catch (error) {
@@ -175,7 +177,7 @@ export default function DashboardPage() {
 
   const getStatusCount = (status: FilterStatus) => {
     if (status === 'all') return tasks.length;
-    return tasks.filter(task => task.status === status).length;
+    return tasks.filter(task => task && task.status === status).length;
   };
 
   if (loading) {

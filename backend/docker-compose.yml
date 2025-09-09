@@ -50,6 +50,7 @@ services:
       - task-manager-network
     volumes:
       - ./services/auth-service:/app
+      - ./lib:/app/lib:ro
       - /app/node_modules
 
   task-service:
@@ -78,6 +79,7 @@ services:
       - task-manager-network
     volumes:
       - ./services/task-service:/app
+      - ./lib:/app/lib:ro
       - /app/node_modules
 
   media-service:
@@ -109,8 +111,39 @@ services:
       - task-manager-network
     volumes:
       - ./services/media-service:/app
+      - ./lib:/app/lib:ro
       - /app/node_modules
       - media_uploads:/app/uploads
+
+  notification-service:
+    build: ./services/notification-service
+    ports:
+      - "3004:3004"
+    environment:
+      DB_HOST: postgres
+      DB_NAME: taskmanager
+      DB_USER: taskuser
+      DB_PASSWORD: taskpassword
+      REDIS_URL: redis://redis:6379
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      GOOGLE_CLOUD_PROJECT: dev-project
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: 587
+      SMTP_USER: noreply@taskmanager.com
+      SMTP_PASS: your-app-password
+      SMTP_FROM: "Task Manager <noreply@taskmanager.com>"
+      NODE_ENV: development
+      LOG_LEVEL: info
+    depends_on:
+      - postgres
+      - redis
+      - pubsub-emulator
+    networks:
+      - task-manager-network
+    volumes:
+      - ./services/notification-service:/app
+      - ./lib:/app/lib:ro
+      - /app/node_modules
 
   api-gateway:
     build: ./services/api-gateway
@@ -120,16 +153,19 @@ services:
       AUTH_SERVICE_URL: http://auth-service:3001
       TASK_SERVICE_URL: http://task-service:3002
       MEDIA_SERVICE_URL: http://media-service:3003
+      NOTIFICATION_SERVICE_URL: http://notification-service:3004
       NODE_ENV: development
       CORS_ORIGIN: http://localhost:3100
     depends_on:
       - auth-service
       - task-service
       - media-service
+      - notification-service
     networks:
       - task-manager-network
     volumes:
       - ./services/api-gateway:/app
+      - ./lib:/app/lib:ro
       - /app/node_modules
 
 volumes:

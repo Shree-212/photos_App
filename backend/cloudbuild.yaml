@@ -19,6 +19,26 @@ steps:
     - '-t'
     - 'gcr.io/$PROJECT_ID/task-service:latest'
     - './services/task-service'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-media-service'
+    args:
+    - 'build'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/media-service:$BUILD_ID'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/media-service:latest'
+    - './services/media-service'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-notification-service'
+    args:
+    - 'build'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/notification-service:$BUILD_ID'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/notification-service:latest'
+    - './services/notification-service'
     
   - name: 'gcr.io/cloud-builders/docker'
     id: 'build-api-gateway'
@@ -58,6 +78,34 @@ steps:
     - 'push'
     - 'gcr.io/$PROJECT_ID/task-service:latest'
     waitFor: ['build-task-service']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-media-service'
+    args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/media-service:$BUILD_ID'
+    waitFor: ['build-media-service']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-media-service-latest'
+    args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/media-service:latest'
+    waitFor: ['build-media-service']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-notification-service'
+    args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/notification-service:$BUILD_ID'
+    waitFor: ['build-notification-service']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-notification-service-latest'
+    args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/notification-service:latest'
+    waitFor: ['build-notification-service']
     
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push-api-gateway'
@@ -85,6 +133,8 @@ steps:
     waitFor: 
     - 'push-auth-service-latest'
     - 'push-task-service-latest'
+    - 'push-media-service-latest'
+    - 'push-notification-service-latest'
     - 'push-api-gateway-latest'
 
 # Store build logs

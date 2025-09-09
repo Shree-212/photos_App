@@ -12,6 +12,7 @@ const { PubSub } = require('@google-cloud/pubsub');
 const { v4: uuidv4 } = require('uuid');
 const promClient = require('prom-client');
 const promMiddleware = require('express-prometheus-middleware');
+const { SimpleTracingManager } = require('../lib/simple-tracing');
 require('dotenv').config();
 
 const app = express();
@@ -95,12 +96,19 @@ pool.connect((err, client, release) => {
   }
 });
 
+// Initialize tracing
+const tracingManager = new SimpleTracingManager('task-service', logger);
+
 // Middleware
 app.use(helmet());
 app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
   credentials: true
 }));
+
+// Add tracing middleware before other middleware
+app.use(tracingManager.createExpressMiddleware());
+
 app.use(express.json({ limit: '10mb' }));
 
 // Prometheus middleware
@@ -460,15 +468,15 @@ app.get('/tasks', authenticate, async (req, res) => {
     const totalTasks = parseInt(countResult.rows[0].count);
     
     const response = {
-      success: true,
-      data: result.rows,
+      tasks: result.rows,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
         total: totalTasks,
-        pages: Math.ceil(totalTasks / limit)
-      },
-      timestamp: new Date().toISOString()
+        totalPages: Math.ceil(totalTasks / limit),
+        hasNext: parseInt(page) * parseInt(limit) < totalTasks,
+        hasPrevious: parseInt(page) > 1
+      }
     };
     
     // Cache the response
@@ -590,9 +598,8 @@ app.post('/tasks', authenticate, async (req, res) => {
     logger.info('Task created', { taskId: task.id, userId: req.user.id });
     
     res.status(201).json({
-      success: true,
-      data: completeTask,
-      message: 'Task created successfully'
+      message: 'Task created successfully',
+      task: completeTask
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -901,9 +908,8 @@ app.put('/tasks/:id', authenticate, async (req, res) => {
     logger.info('Task updated', { taskId, userId: req.user.id });
     
     res.json({
-      success: true,
-      data: completeTask,
-      message: 'Task updated successfully'
+      message: 'Task updated successfully',
+      task: completeTask
     });
   } catch (error) {
     if (client) {

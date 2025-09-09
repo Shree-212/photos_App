@@ -35,7 +35,7 @@ This will:
 - ✅ Start PostgreSQL with schema initialization
 - ✅ Start Redis for caching
 - ✅ Start Pub/Sub emulator for events
-- ✅ Start all microservices (Auth, Task, Media, API Gateway)
+- ✅ Start all microservices (Auth, Task, Media, Notification, API Gateway)
 - ✅ Wait for all services to be healthy
 - ✅ Display service URLs and testing commands
 
@@ -49,6 +49,7 @@ Once started, your services will be available at:
 | **Auth Service** | http://localhost:3001 | Authentication |
 | **Task Service** | http://localhost:3002 | Task management |
 | **Media Service** | http://localhost:3003 | File uploads & media |
+| **Notification Service** | http://localhost:3004 | Event-driven notifications |
 | **PostgreSQL** | localhost:5432 | Database |
 | **Redis** | localhost:6379 | Cache & sessions |
 | **Pub/Sub Emulator** | localhost:8085 | Event messaging |

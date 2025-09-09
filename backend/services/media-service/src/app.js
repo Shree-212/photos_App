@@ -17,6 +17,7 @@ const { v4: uuidv4 } = require('uuid');
 const mime = require('mime-types');
 const promClient = require('prom-client');
 const promMiddleware = require('express-prometheus-middleware');
+const { SimpleTracingManager } = require('../lib/simple-tracing');
 require('dotenv').config();
 
 const app = express();
@@ -63,6 +64,9 @@ const logger = winston.createLogger({
     })
   ],
 });
+
+// Initialize tracing manager after logger is defined
+const tracingManager = new SimpleTracingManager('media-service', logger);
 
 // Database connection
 const pool = new Pool({
@@ -118,6 +122,9 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
   credentials: true
 }));
+
+// Add tracing middleware early
+app.use(tracingManager.createExpressMiddleware());
 
 // Rate limiting
 const limiter = rateLimit({

@@ -30,6 +30,8 @@ const {
   healthChecks 
 } = require('../lib/monitoring');
 
+const { SimpleTracingManager } = require('../lib/simple-tracing');
+
 require('dotenv').config();
 
 const app = express();
@@ -95,12 +97,19 @@ const logger = winston.createLogger({
   ],
 });
 
+// Initialize tracing manager after logger is defined
+const tracingManager = new SimpleTracingManager('auth-service', logger);
+
 // Middleware with fallbacks
 app.use(securityHeaders || helmet());
 app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
   credentials: true
 }));
+
+// Add tracing middleware early in the chain
+app.use(tracingManager.createExpressMiddleware());
+
 app.use(express.json({ limit: '10mb' }));
 
 // Rate limiting with fallback
