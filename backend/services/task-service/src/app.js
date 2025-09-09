@@ -8,9 +8,38 @@ const { Pool } = require('pg');
 const Redis = require('redis');
 const winston = require('winston');
 const Joi = require('joi');
+const { PubSub } = require('@google-cloud/pubsub');
+const { v4: uuidv4 } = require('uuid');
+const promClient = require('prom-client');
+const promMiddleware = require('express-prometheus-middleware');
 require('dotenv').config();
 
 const app = express();
+
+// Prometheus metrics
+const register = new promClient.Registry();
+promClient.collectDefaultMetrics({ register });
+
+// Custom metrics
+const taskCounter = new promClient.Counter({
+  name: 'tasks_total',
+  help: 'Total number of tasks',
+  labelNames: ['operation', 'status'],
+  registers: [register]
+});
+
+const taskDuration = new promClient.Histogram({
+  name: 'task_operation_duration_seconds',
+  help: 'Duration of task operations',
+  labelNames: ['operation'],
+  registers: [register]
+});
+
+// Pub/Sub client for event publishing
+const pubsub = new PubSub({
+  projectId: process.env.GOOGLE_CLOUD_PROJECT,
+  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
+});
 
 // Logger configuration
 const logger = winston.createLogger({
@@ -74,6 +103,13 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
+// Prometheus middleware
+app.use(promMiddleware({
+  metricsPath: '/metrics',
+  collectDefaultMetrics: true,
+  collectGCMetrics: true,
+}));
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -88,7 +124,8 @@ const taskSchema = Joi.object({
   description: Joi.string().max(2000).allow(''),
   priority: Joi.string().valid('low', 'medium', 'high').default('medium'),
   status: Joi.string().valid('pending', 'in-progress', 'completed', 'cancelled').default('pending'),
-  dueDate: Joi.date().iso().allow(null)
+  dueDate: Joi.date().iso().allow(null),
+  mediaIds: Joi.array().items(Joi.number().integer().positive()).default([])
 });
 
 const updateTaskSchema = Joi.object({
@@ -96,10 +133,94 @@ const updateTaskSchema = Joi.object({
   description: Joi.string().max(2000).allow(''),
   priority: Joi.string().valid('low', 'medium', 'high'),
   status: Joi.string().valid('pending', 'in-progress', 'completed', 'cancelled'),
-  dueDate: Joi.date().iso().allow(null)
+  dueDate: Joi.date().iso().allow(null),
+  mediaIds: Joi.array().items(Joi.number().integer().positive()).default([])
 }).min(1);
 
+const attachMediaSchema = Joi.object({
+  mediaId: Joi.number().integer().positive().required()
+});
+
 // Helper functions
+
+// Event publishing helper
+const publishEvent = async (eventType, data, correlationId = null) => {
+  try {
+    const event = {
+      eventType,
+      timestamp: new Date().toISOString(),
+      serviceId: 'task-service',
+      correlationId: correlationId || uuidv4(),
+      data
+    };
+
+    const topic = pubsub.topic('task-manager-events');
+    await topic.publishMessage({ json: event });
+    
+    logger.info('Event published:', { eventType, correlationId: event.correlationId });
+  } catch (error) {
+    logger.error('Failed to publish event:', error.message);
+  }
+};
+
+// Media service integration
+const getMediaFiles = async (mediaIds, userId, token) => {
+  if (!mediaIds || mediaIds.length === 0) return [];
+  
+  try {
+    const mediaServiceUrl = process.env.MEDIA_SERVICE_URL || 'http://localhost:3003';
+    const promises = mediaIds.map(id => 
+      axios.get(`${mediaServiceUrl}/media/${id}`, {
+        headers: { authorization: `Bearer ${token}` },
+        timeout: 5000
+      })
+    );
+    
+    const responses = await Promise.allSettled(promises);
+    return responses
+      .filter(result => result.status === 'fulfilled' && result.value.status === 200)
+      .map(result => result.value.data.media);
+  } catch (error) {
+    logger.warn('Failed to fetch media files:', error.message);
+    return [];
+  }
+};
+
+// Get task with media
+const getTaskWithMedia = async (taskId, userId, token = null) => {
+  const taskResult = await pool.query(
+    'SELECT * FROM tasks WHERE id = $1 AND user_id = $2',
+    [taskId, userId]
+  );
+  
+  if (taskResult.rows.length === 0) {
+    return null;
+  }
+  
+  const task = taskResult.rows[0];
+  
+  // Get associated media
+  const mediaResult = await pool.query(`
+    SELECT m.*
+    FROM media m
+    JOIN task_media tm ON m.id = tm.media_id
+    WHERE tm.task_id = $1
+    ORDER BY tm.created_at
+  `, [taskId]);
+  
+  task.media = mediaResult.rows.map(media => ({
+    id: media.id,
+    filename: media.filename,
+    originalName: media.original_name,
+    mimeType: media.mime_type,
+    fileSize: media.size_bytes,
+    createdAt: media.created_at,
+    thumbnailUrl: `/media/${media.id}/thumbnail`,
+    downloadUrl: `/media/${media.id}/download`
+  }));
+  
+  return task;
+};
 const verifyTokenWithAuthService = async (token) => {
   const authServiceUrl = process.env.AUTH_SERVICE_URL || 'http://auth-service:3001';
   logger.debug(`Verifying token with auth service: ${authServiceUrl}`);
@@ -199,6 +320,12 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Metrics endpoint
+app.get('/metrics', (req, res) => {
+  res.set('Content-Type', register.contentType);
+  res.end(register.metrics());
+});
+
 // Readiness check endpoint
 app.get('/ready', async (req, res) => {
   try {
@@ -240,6 +367,8 @@ app.get('/ready', async (req, res) => {
 
 // Get all tasks for the authenticated user
 app.get('/tasks', authenticate, async (req, res) => {
+  const timer = taskDuration.startTimer({ operation: 'get_tasks' });
+  
   try {
     logger.info(`GET /tasks`, { ip: req.ip, userAgent: req.get('User-Agent') });
     const { page = 1, limit = 10, status, priority, search } = req.query;
@@ -250,33 +379,56 @@ app.get('/tasks', authenticate, async (req, res) => {
     const cached = await getCachedTasks(cacheKey);
     if (cached) {
       logger.debug('Returning cached tasks');
+      taskCounter.labels('get_tasks', 'cache_hit').inc();
+      timer();
       return res.json(cached);
     }
     
-    let query = 'SELECT * FROM tasks WHERE user_id = $1';
+    let query = `
+      SELECT t.*, 
+             COALESCE(
+               json_agg(
+                 json_build_object(
+                   'id', m.id,
+                   'filename', m.filename,
+                   'originalName', m.original_name,
+                   'mimeType', m.mime_type,
+                   'fileSize', m.size_bytes,
+                   'thumbnailUrl', '/media/' || m.id || '/thumbnail',
+                   'downloadUrl', '/media/' || m.id || '/download'
+                 ) ORDER BY tm.created_at
+               ) FILTER (WHERE m.id IS NOT NULL),
+               '[]'::json
+             ) as media
+      FROM tasks t
+      LEFT JOIN task_media tm ON t.id = tm.task_id
+      LEFT JOIN media m ON tm.media_id = m.id
+      WHERE t.user_id = $1
+    `;
+    
     let queryParams = [req.user.id];
     let paramIndex = 2;
     
     // Add filters
     if (status) {
-      query += ` AND status = $${paramIndex}`;
+      query += ` AND t.status = $${paramIndex}`;
       queryParams.push(status);
       paramIndex++;
     }
     
     if (priority) {
-      query += ` AND priority = $${paramIndex}`;
+      query += ` AND t.priority = $${paramIndex}`;
       queryParams.push(priority);
       paramIndex++;
     }
     
     if (search) {
-      query += ` AND (title ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`;
+      query += ` AND (t.title ILIKE $${paramIndex} OR t.description ILIKE $${paramIndex})`;
       queryParams.push(`%${search}%`);
       paramIndex++;
     }
     
-    query += ' ORDER BY created_at DESC';
+    query += ` GROUP BY t.id ORDER BY t.created_at DESC`;
     query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     queryParams.push(parseInt(limit), parseInt(offset));
     
@@ -322,8 +474,12 @@ app.get('/tasks', authenticate, async (req, res) => {
     // Cache the response
     await setCachedTasks(cacheKey, response);
     
+    taskCounter.labels('get_tasks', 'success').inc();
+    timer();
     res.json(response);
   } catch (error) {
+    taskCounter.labels('get_tasks', 'error').inc();
+    timer();
     logger.error('Failed to fetch tasks:', error);
     res.status(500).json({ error: 'Failed to fetch tasks' });
   }
@@ -331,23 +487,29 @@ app.get('/tasks', authenticate, async (req, res) => {
 
 // Get specific task
 app.get('/tasks/:id', authenticate, async (req, res) => {
+  const timer = taskDuration.startTimer({ operation: 'get_task' });
+  
   try {
     const taskId = req.params.id;
+    const authHeader = req.headers.authorization;
     
-    const result = await pool.query(
-      'SELECT * FROM tasks WHERE id = $1 AND user_id = $2',
-      [taskId, req.user.id]
-    );
+    const task = await getTaskWithMedia(taskId, req.user.id, authHeader);
     
-    if (result.rows.length === 0) {
+    if (!task) {
+      taskCounter.labels('get_task', 'not_found').inc();
+      timer();
       return res.status(404).json({ error: 'Task not found' });
     }
     
+    taskCounter.labels('get_task', 'success').inc();
+    timer();
     res.json({
       success: true,
-      data: result.rows[0]
+      data: task
     });
   } catch (error) {
+    taskCounter.labels('get_task', 'error').inc();
+    timer();
     logger.error('Failed to fetch task:', error);
     res.status(500).json({ error: 'Failed to fetch task' });
   }
@@ -355,112 +517,455 @@ app.get('/tasks/:id', authenticate, async (req, res) => {
 
 // Create new task
 app.post('/tasks', authenticate, async (req, res) => {
+  const timer = taskDuration.startTimer({ operation: 'create_task' });
+  const client = await pool.connect();
+  
   try {
     // Validate request body
     const { error, value } = taskSchema.validate(req.body);
     if (error) {
+      taskCounter.labels('create_task', 'validation_error').inc();
+      timer();
       return res.status(400).json({ 
         error: 'Validation failed',
         details: error.details.map(d => d.message)
       });
     }
     
-    const { title, description, priority, status, dueDate } = value;
+    const { title, description, priority, status, dueDate, mediaIds } = value;
     
-    const result = await pool.query(
+    await client.query('BEGIN');
+    
+    // Create the task
+    const taskResult = await client.query(
       `INSERT INTO tasks (user_id, title, description, priority, status, due_date) 
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
       [req.user.id, title, description, priority, status, dueDate]
     );
     
+    const task = taskResult.rows[0];
+    
+    // Attach media files if provided
+    if (mediaIds && mediaIds.length > 0) {
+      // Verify media files belong to the user
+      const mediaResult = await client.query(
+        'SELECT id FROM media WHERE id = ANY($1) AND user_id = $2',
+        [mediaIds, req.user.id]
+      );
+      
+      const validMediaIds = mediaResult.rows.map(row => row.id);
+      
+      if (validMediaIds.length > 0) {
+        const mediaInserts = validMediaIds.map((mediaId, index) => 
+          `($1, $${index + 2})`
+        ).join(', ');
+        
+        await client.query(
+          `INSERT INTO task_media (task_id, media_id) VALUES ${mediaInserts}`,
+          [task.id, ...validMediaIds]
+        );
+      }
+    }
+    
+    await client.query('COMMIT');
+    
+    // Get the complete task with media
+    const completeTask = await getTaskWithMedia(task.id, req.user.id);
+    
     // Invalidate user's task cache
     await invalidateUserCache(req.user.id);
     
-    logger.info('Task created', { taskId: result.rows[0].id, userId: req.user.id });
+    // Publish event
+    await publishEvent('task.created', {
+      taskId: task.id,
+      userId: req.user.id,
+      title: task.title,
+      status: task.status,
+      priority: task.priority,
+      mediaCount: mediaIds ? mediaIds.length : 0
+    });
+    
+    taskCounter.labels('create_task', 'success').inc();
+    timer();
+    logger.info('Task created', { taskId: task.id, userId: req.user.id });
     
     res.status(201).json({
       success: true,
-      data: result.rows[0],
+      data: completeTask,
       message: 'Task created successfully'
     });
   } catch (error) {
+    await client.query('ROLLBACK');
+    taskCounter.labels('create_task', 'error').inc();
+    timer();
     logger.error('Failed to create task:', error);
     res.status(500).json({ error: 'Failed to create task' });
+  } finally {
+    client.release();
   }
 });
 
+// Attach media to task
+app.post('/tasks/:id/media', authenticate, async (req, res) => {
+  const timer = taskDuration.startTimer({ operation: 'attach_media' });
+  const client = await pool.connect();
+  
+  try {
+    const taskId = req.params.id;
+    const { error, value } = attachMediaSchema.validate(req.body);
+    
+    if (error) {
+      timer();
+      return res.status(400).json({ 
+        error: 'Validation failed',
+        details: error.details.map(d => d.message)
+      });
+    }
+    
+    const { mediaId } = value;
+    
+    await client.query('BEGIN');
+    
+    // Verify task belongs to user
+    const taskResult = await client.query(
+      'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
+      [taskId, req.user.id]
+    );
+    
+    if (taskResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      timer();
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    
+    // Verify media belongs to user
+    const mediaResult = await client.query(
+      'SELECT id FROM media WHERE id = $1 AND user_id = $2',
+      [mediaId, req.user.id]
+    );
+    
+    if (mediaResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      timer();
+      return res.status(404).json({ error: 'Media file not found' });
+    }
+    
+    // Check if already attached
+    const existingResult = await client.query(
+      'SELECT id FROM task_media WHERE task_id = $1 AND media_id = $2',
+      [taskId, mediaId]
+    );
+    
+    if (existingResult.rows.length > 0) {
+      await client.query('ROLLBACK');
+      timer();
+      return res.status(409).json({ error: 'Media already attached to task' });
+    }
+    
+    // Attach media to task
+    await client.query(
+      'INSERT INTO task_media (task_id, media_id) VALUES ($1, $2)',
+      [taskId, mediaId]
+    );
+    
+    await client.query('COMMIT');
+    
+    // Invalidate cache
+    await invalidateUserCache(req.user.id);
+    
+    // Publish event
+    await publishEvent('task.media_attached', {
+      taskId: parseInt(taskId),
+      mediaId,
+      userId: req.user.id
+    });
+    
+    timer();
+    res.json({ message: 'Media attached to task successfully' });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    timer();
+    logger.error('Failed to attach media to task:', error);
+    res.status(500).json({ error: 'Failed to attach media to task' });
+  } finally {
+    client.release();
+  }
+});
+
+// Remove media from task
+app.delete('/tasks/:id/media/:mediaId', authenticate, async (req, res) => {
+  const timer = taskDuration.startTimer({ operation: 'detach_media' });
+  const client = await pool.connect();
+  
+  try {
+    const { id: taskId, mediaId } = req.params;
+    
+    await client.query('BEGIN');
+    
+    // Verify task belongs to user
+    const taskResult = await client.query(
+      'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
+      [taskId, req.user.id]
+    );
+    
+    if (taskResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      timer();
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    
+    // Remove the association
+    const deleteResult = await client.query(
+      'DELETE FROM task_media WHERE task_id = $1 AND media_id = $2',
+      [taskId, mediaId]
+    );
+    
+    if (deleteResult.rowCount === 0) {
+      await client.query('ROLLBACK');
+      timer();
+      return res.status(404).json({ error: 'Media not attached to this task' });
+    }
+    
+    await client.query('COMMIT');
+    
+    // Invalidate cache
+    await invalidateUserCache(req.user.id);
+    
+    // Publish event
+    await publishEvent('task.media_detached', {
+      taskId: parseInt(taskId),
+      mediaId: parseInt(mediaId),
+      userId: req.user.id
+    });
+    
+    timer();
+    res.json({ message: 'Media removed from task successfully' });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    timer();
+    logger.error('Failed to remove media from task:', error);
+    res.status(500).json({ error: 'Failed to remove media from task' });
+  } finally {
+    client.release();
+  }
+});
+
+// Get task media
+app.get('/tasks/:id/media', authenticate, async (req, res) => {
+  try {
+    const taskId = req.params.id;
+    
+    // Verify task belongs to user
+    const taskResult = await pool.query(
+      'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
+      [taskId, req.user.id]
+    );
+    
+    if (taskResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    
+    // Get task media
+    const mediaResult = await pool.query(`
+      SELECT m.*
+      FROM media m
+      JOIN task_media tm ON m.id = tm.media_id
+      WHERE tm.task_id = $1
+      ORDER BY tm.created_at
+    `, [taskId]);
+    
+    const media = mediaResult.rows.map(media => ({
+      id: media.id,
+      filename: media.filename,
+      originalName: media.original_name,
+      mimeType: media.mime_type,
+      fileSize: media.size_bytes,
+      createdAt: media.created_at,
+      thumbnailUrl: `/media/${media.id}/thumbnail`,
+      downloadUrl: `/media/${media.id}/download`
+    }));
+    
+    res.json({
+      success: true,
+      data: media
+    });
+    
+  } catch (error) {
+    logger.error('Failed to fetch task media:', error);
+    res.status(500).json({ error: 'Failed to fetch task media' });
+  }
+});
 // Update task
 app.put('/tasks/:id', authenticate, async (req, res) => {
+  const timer = taskDuration.startTimer({ operation: 'update_task' });
+  const client = await pool.connect();
+  
   try {
     const taskId = req.params.id;
     
     // Validate request body
     const { error, value } = updateTaskSchema.validate(req.body);
     if (error) {
+      taskCounter.labels('update_task', 'validation_error').inc();
+      timer();
       return res.status(400).json({ 
         error: 'Validation failed',
         details: error.details.map(d => d.message)
       });
     }
     
-    const updates = value;
-    const setClause = Object.keys(updates)
-      .map((key, index) => `${key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)} = $${index + 3}`)
-      .join(', ');
+    const { mediaIds, ...taskUpdates } = value;
     
-    if (setClause === '') {
-      return res.status(400).json({ error: 'No valid fields to update' });
+    await client.query('BEGIN');
+    
+    // Update task basic fields if any are provided
+    if (Object.keys(taskUpdates).length > 0) {
+      const setClause = Object.keys(taskUpdates)
+        .map((key, index) => `${key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)} = $${index + 3}`)
+        .join(', ');
+      
+      const query = `
+        UPDATE tasks SET 
+        ${setClause},
+        updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND user_id = $2 RETURNING *
+      `;
+      
+      const result = await client.query(
+        query,
+        [taskId, req.user.id, ...Object.values(taskUpdates)]
+      );
+      
+      if (result.rows.length === 0) {
+        await client.query('ROLLBACK');
+        taskCounter.labels('update_task', 'not_found').inc();
+        timer();
+        return res.status(404).json({ error: 'Task not found' });
+      }
     }
     
-    const query = `
-      UPDATE tasks SET 
-      ${setClause},
-      updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1 AND user_id = $2 RETURNING *
-    `;
-    
-    const result = await pool.query(
-      query,
-      [taskId, req.user.id, ...Object.values(updates)]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Task not found' });
+    // Handle media updates if mediaIds provided
+    if (mediaIds && mediaIds.length >= 0) {
+      // Remove all existing media attachments
+      await client.query(
+        'DELETE FROM task_media WHERE task_id = $1',
+        [taskId]
+      );
+      
+      // Add new media attachments
+      if (mediaIds.length > 0) {
+        for (const mediaId of mediaIds) {
+          // Verify media exists and belongs to user
+          const mediaCheck = await client.query(
+            'SELECT id FROM media WHERE id = $1 AND user_id = $2',
+            [mediaId, req.user.id]
+          );
+          
+          if (mediaCheck.rows.length === 0) {
+            await client.query('ROLLBACK');
+            timer();
+            return res.status(400).json({ 
+              error: `Media with ID ${mediaId} not found or access denied` 
+            });
+          }
+          
+          // Attach media to task
+          await client.query(
+            'INSERT INTO task_media (task_id, media_id) VALUES ($1, $2)',
+            [taskId, mediaId]
+          );
+        }
+      }
     }
+    
+    await client.query('COMMIT');
+    
+    // Get complete task with media
+    const completeTask = await getTaskWithMedia(taskId, req.user.id);
     
     // Invalidate user's task cache
     await invalidateUserCache(req.user.id);
     
+    // Publish event
+    await publishEvent('task.updated', {
+      taskId: parseInt(taskId),
+      userId: req.user.id,
+      changes: Object.keys(taskUpdates),
+      mediaUpdated: mediaIds !== undefined
+    });
+    
+    taskCounter.labels('update_task', 'success').inc();
+    timer();
     logger.info('Task updated', { taskId, userId: req.user.id });
     
     res.json({
       success: true,
-      data: result.rows[0],
+      data: completeTask,
       message: 'Task updated successfully'
     });
   } catch (error) {
+    if (client) {
+      await client.query('ROLLBACK');
+    }
+    taskCounter.labels('update_task', 'error').inc();
+    timer();
     logger.error('Failed to update task:', error);
     res.status(500).json({ error: 'Failed to update task' });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 });
 
 // Delete task
 app.delete('/tasks/:id', authenticate, async (req, res) => {
+  const timer = taskDuration.startTimer({ operation: 'delete_task' });
+  const client = await pool.connect();
+  
   try {
     const taskId = req.params.id;
     
-    const result = await pool.query(
-      'DELETE FROM tasks WHERE id = $1 AND user_id = $2 RETURNING *',
+    await client.query('BEGIN');
+    
+    // Get task details before deletion for event
+    const taskResult = await client.query(
+      'SELECT * FROM tasks WHERE id = $1 AND user_id = $2',
       [taskId, req.user.id]
     );
     
-    if (result.rows.length === 0) {
+    if (taskResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      taskCounter.labels('delete_task', 'not_found').inc();
+      timer();
       return res.status(404).json({ error: 'Task not found' });
     }
+    
+    const task = taskResult.rows[0];
+    
+    // Delete task (cascade will handle task_media)
+    await client.query(
+      'DELETE FROM tasks WHERE id = $1 AND user_id = $2',
+      [taskId, req.user.id]
+    );
+    
+    await client.query('COMMIT');
     
     // Invalidate user's task cache
     await invalidateUserCache(req.user.id);
     
+    // Publish event
+    await publishEvent('task.deleted', {
+      taskId: task.id,
+      userId: req.user.id,
+      title: task.title,
+      status: task.status
+    });
+    
+    taskCounter.labels('delete_task', 'success').inc();
+    timer();
     logger.info('Task deleted', { taskId, userId: req.user.id });
     
     res.json({
@@ -468,8 +973,13 @@ app.delete('/tasks/:id', authenticate, async (req, res) => {
       message: 'Task deleted successfully'
     });
   } catch (error) {
+    await client.query('ROLLBACK');
+    taskCounter.labels('delete_task', 'error').inc();
+    timer();
     logger.error('Failed to delete task:', error);
     res.status(500).json({ error: 'Failed to delete task' });
+  } finally {
+    client.release();
   }
 });
 

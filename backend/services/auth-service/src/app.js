@@ -8,13 +8,78 @@ const { Pool } = require('pg');
 const Redis = require('redis');
 const winston = require('winston');
 const Joi = require('joi');
+const promClient = require('prom-client');
+const path = require('path');
+
+// Import security and monitoring utilities
+const { 
+  JWTManager, 
+  rateLimiters, 
+  securityHeaders, 
+  createAuthMiddleware,
+  sanitizers,
+  validatePasswordStrength,
+  hashPassword: secureHashPassword,
+  blacklistToken,
+  auditLogger
+} = require('../lib/security');
+
+const { 
+  MetricsCollector, 
+  HealthChecker, 
+  healthChecks 
+} = require('../lib/monitoring');
+
 require('dotenv').config();
 
 const app = express();
 
+// Initialize security and monitoring
+const jwtManager = new JWTManager();
+const metricsCollector = new MetricsCollector('auth_service');
+const healthChecker = new HealthChecker();
+
+// Create Prometheus metrics
+const authAttempts = new promClient.Counter({
+  name: 'auth_attempts_total',
+  help: 'Total number of authentication attempts',
+  labelNames: ['type', 'status']
+});
+
+const activeUsers = new promClient.Gauge({
+  name: 'active_users_total',
+  help: 'Total number of active users'
+});
+
+// Custom rate limiter for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // limit each IP to 5 requests per windowMs
+  message: 'Too many authentication attempts from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const auditLog = auditLogger(winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.errors({ stack: true }),
+    winston.format.json()
+  ),
+  defaultMeta: { service: 'auth-service' },
+  transports: [
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' }),
+    new winston.transports.Console({
+      format: winston.format.simple()
+    })
+  ],
+}));
+
 // Logger configuration
 const logger = winston.createLogger({
-  level: 'info',
+  level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
@@ -30,32 +95,26 @@ const logger = winston.createLogger({
   ],
 });
 
-// Middleware
-app.use(helmet());
+// Middleware with fallbacks
+app.use(securityHeaders || helmet());
 app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
 
-// Rate limiting
-const limiter = rateLimit({
+// Rate limiting with fallback
+app.use(rateLimiters?.general || rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.'
-});
-app.use(limiter);
+  max: 100 // limit each IP to 100 requests per windowMs
+}));
 
-// Strict rate limiting for auth endpoints
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: process.env.NODE_ENV === 'production' ? 5 : 50, // 5 in production, 50 in development
-  message: 'Too many authentication attempts, please try again later.',
-  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-});
+// Metrics middleware with error handling
+if (metricsCollector && metricsCollector.createHttpMetricsMiddleware) {
+  app.use(metricsCollector.createHttpMetricsMiddleware());
+}
 
-// Database connection
+// Database connection with better error handling
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   database: process.env.DB_NAME || 'taskmanager',
@@ -65,59 +124,217 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 5000, // Reduced from 2000 to 5000
 });
 
-// Redis connection
+// Test database connection on startup
+(async () => {
+  try {
+    const client = await pool.connect();
+    await client.query('SELECT 1');
+    client.release();
+    logger.info('Database connection established successfully');
+  } catch (error) {
+    logger.error('Failed to connect to database:', error.message);
+    // Don't exit the process, just log the error
+    // process.exit(1);
+  }
+})();
+
+// Redis connection with error handling
 let redisClient;
-if (process.env.REDIS_URL) {
-  redisClient = Redis.createClient({
-    url: process.env.REDIS_URL
-  });
-  
-  redisClient.on('error', (err) => {
-    logger.error('Redis connection error:', err);
-  });
-  
-  redisClient.connect().catch(logger.error);
+(async () => {
+  if (process.env.REDIS_URL) {
+    try {
+      redisClient = Redis.createClient({
+        url: process.env.REDIS_URL,
+        socket: {
+          connectTimeout: 5000,
+          commandTimeout: 5000,
+        },
+        retry_strategy: (options) => {
+          if (options.error && options.error.code === 'ECONNREFUSED') {
+            // End reconnecting on a specific error and flush all commands with
+            // a individual error
+            logger.warn('Redis server refused connection, operating without cache');
+            return null;
+          }
+          if (options.total_retry_time > 1000 * 60 * 60) {
+            // End reconnecting after a specific timeout and flush all commands
+            // with a individual error
+            logger.warn('Redis retry time exhausted, operating without cache');
+            return null;
+          }
+          if (options.attempt > 3) {
+            // End reconnecting with built in error
+            logger.warn('Redis max retry attempts reached, operating without cache');
+            return null;
+          }
+          // reconnect after
+          return Math.min(options.attempt * 100, 3000);
+        }
+      });
+      
+      redisClient.on('error', (err) => {
+        logger.warn('Redis connection error, operating without cache:', err.message);
+        redisClient = null;
+      });
+      
+      redisClient.on('connect', () => {
+        logger.info('Redis connected');
+        if (metricsCollector.updateRedisConnections) {
+          metricsCollector.updateRedisConnections(1);
+        }
+      });
+      
+      await redisClient.connect();
+      logger.info('Redis connection established');
+    } catch (error) {
+      logger.warn('Failed to connect to Redis, operating without cache:', error.message);
+      redisClient = null;
+    }
+  } else {
+    logger.info('Redis URL not configured, operating without cache');
+  }
+})();
+
+// Setup health checks with error handling
+try {
+  if (healthChecks && healthChecks.database) {
+    healthChecker.registerCheck('database', healthChecks.database(pool));
+  } else {
+    // Fallback database health check
+    healthChecker.registerCheck('database', async () => {
+      try {
+        await pool.query('SELECT 1');
+        return { status: 'healthy' };
+      } catch (error) {
+        return { status: 'unhealthy', error: error.message };
+      }
+    });
+  }
+
+  if (redisClient && healthChecks && healthChecks.redis) {
+    healthChecker.registerCheck('redis', healthChecks.redis(redisClient));
+  } else if (redisClient) {
+    // Fallback redis health check
+    healthChecker.registerCheck('redis', async () => {
+      try {
+        await redisClient.ping();
+        return { status: 'healthy' };
+      } catch (error) {
+        return { status: 'unhealthy', error: error.message };
+      }
+    });
+  }
+
+  if (healthChecks && healthChecks.memory) {
+    healthChecker.registerCheck('memory', healthChecks.memory(256)); // 256MB limit
+  }
+} catch (error) {
+  logger.warn('Failed to setup health checks:', error.message);
 }
 
-// Validation schemas
+// Validation schemas with enhanced security
 const registerSchema = Joi.object({
-  email: Joi.string().email().required(),
-  password: Joi.string().min(8).pattern(new RegExp('^(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[!@#\\$%\\^&\\*])')).required()
-    .messages({
-      'string.pattern.base': 'Password must contain at least one lowercase letter, one uppercase letter, one number, and one special character'
-    }),
-  firstName: Joi.string().min(2).max(50).required(),
-  lastName: Joi.string().min(2).max(50).required()
+  email: Joi.string().email().max(255).required(),
+  password: Joi.string().min(8).max(128).required(),
+  firstName: Joi.string().min(2).max(50).pattern(/^[a-zA-Z\s]+$/).required(),
+  lastName: Joi.string().min(2).max(50).pattern(/^[a-zA-Z\s]+$/).required()
 });
 
 const loginSchema = Joi.object({
-  email: Joi.string().email().required(),
+  email: Joi.string().email().max(255).required(),
   password: Joi.string().required()
 });
 
-// Helper functions
+// Helper functions with fallbacks
 const generateToken = (user) => {
-  return jwt.sign(
-    { 
+  if (jwtManager && jwtManager.generateToken) {
+    return jwtManager.generateToken({ 
       userId: user.id, 
       email: user.email,
       firstName: user.first_name,
       lastName: user.last_name
-    },
-    process.env.JWT_SECRET || 'fallback-secret-key',
-    { expiresIn: '24h' }
-  );
-};
-
-const hashPassword = async (password) => {
-  return await bcrypt.hash(password, 12);
+    });
+  } else {
+    // Fallback JWT generation
+    return jwt.sign(
+      { 
+        userId: user.id, 
+        email: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name
+      },
+      process.env.JWT_SECRET || 'fallback-secret-key',
+      { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+    );
+  }
 };
 
 const verifyPassword = async (password, hashedPassword) => {
   return await bcrypt.compare(password, hashedPassword);
+};
+
+const hashPassword = async (password) => {
+  if (secureHashPassword) {
+    return await secureHashPassword(password);
+  } else {
+    // Fallback password hashing
+    const saltRounds = 12;
+    return await bcrypt.hash(password, saltRounds);
+  }
+};
+
+const validatePassword = (password) => {
+  if (validatePasswordStrength) {
+    return validatePasswordStrength(password);
+  } else {
+    // Basic password validation fallback
+    const errors = [];
+    if (password.length < 8) errors.push('Password must be at least 8 characters long');
+    if (!/[A-Z]/.test(password)) errors.push('Password must contain at least one uppercase letter');
+    if (!/[a-z]/.test(password)) errors.push('Password must contain at least one lowercase letter');
+    if (!/[0-9]/.test(password)) errors.push('Password must contain at least one number');
+    
+    return {
+      valid: errors.length === 0,
+      errors
+    };
+  }
+};
+
+const sanitizeInput = (input, maxLength = 255) => {
+  if (sanitizers && sanitizers.sanitizeString) {
+    return sanitizers.sanitizeString(input, maxLength);
+  } else {
+    // Fallback sanitization
+    return input.trim().substring(0, maxLength);
+  }
+};
+
+const sanitizeEmail = (email) => {
+  if (sanitizers && sanitizers.sanitizeEmail) {
+    return sanitizers.sanitizeEmail(email);
+  } else {
+    // Fallback email sanitization
+    return email.toLowerCase().trim();
+  }
+};
+
+const logAudit = (req, success, reason) => {
+  if (auditLog && auditLog.logAuthAttempt) {
+    auditLog.logAuthAttempt(req, success, reason);
+  } else {
+    // Fallback audit logging
+    logger.info('Auth attempt', {
+      ip: req.ip,
+      userAgent: req.get('User-Agent'),
+      success,
+      reason,
+      timestamp: new Date().toISOString()
+    });
+  }
 };
 
 // Cache user token in Redis
@@ -156,7 +373,7 @@ const isTokenCached = async (userId, token) => {
   return true;
 };
 
-// Middleware for request logging
+// Middleware for request logging and metrics
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.path}`, {
     ip: req.ip,
@@ -165,14 +382,68 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
-    service: 'auth-service',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
+// Health check endpoint with fallback
+app.get('/health', async (req, res) => {
+  try {
+    const health = {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      service: 'auth-service',
+      checks: {}
+    };
+
+    // Check database
+    try {
+      await pool.query('SELECT 1');
+      health.checks.database = 'healthy';
+    } catch (error) {
+      health.checks.database = 'unhealthy';
+      health.status = 'unhealthy';
+    }
+
+    // Check Redis (optional)
+    if (redisClient) {
+      try {
+        await redisClient.ping();
+        health.checks.redis = 'healthy';
+      } catch (error) {
+        health.checks.redis = 'unhealthy';
+        // Don't mark overall service as unhealthy for Redis
+      }
+    } else {
+      health.checks.redis = 'not-configured';
+    }
+
+    const statusCode = health.status === 'healthy' ? 200 : 503;
+    res.status(statusCode).json(health);
+  } catch (error) {
+    logger.error('Health check error:', error);
+    res.status(503).json({
+      status: 'unhealthy',
+      timestamp: new Date().toISOString(),
+      service: 'auth-service',
+      error: error.message
+    });
+  }
+});
+
+// Metrics endpoint with error handling
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', promClient.register.contentType);
+    
+    if (metricsCollector && metricsCollector.getMetrics) {
+      const metrics = await metricsCollector.getMetrics();
+      res.end(metrics);
+    } else {
+      // Fallback to default Prometheus registry
+      const metrics = await promClient.register.metrics();
+      res.end(metrics);
+    }
+  } catch (error) {
+    logger.error('Metrics endpoint error:', error);
+    res.status(500).end('Error collecting metrics: ' + error.message);
+  }
 });
 
 // Ready check endpoint
@@ -209,11 +480,12 @@ app.get('/ready', async (req, res) => {
 });
 
 // Register endpoint
-app.post('/auth/register', authLimiter, async (req, res) => {
+app.post('/auth/register', rateLimiters?.auth || authLimiter, async (req, res) => {
   try {
     // Validate input
     const { error, value } = registerSchema.validate(req.body);
     if (error) {
+      logAudit(req, false, 'validation_failed');
       return res.status(400).json({ 
         error: 'Validation failed', 
         details: error.details.map(d => d.message)
@@ -222,23 +494,47 @@ app.post('/auth/register', authLimiter, async (req, res) => {
 
     const { email, password, firstName, lastName } = value;
     
+    // Sanitize inputs
+    const sanitizedEmail = sanitizeEmail(email);
+    const sanitizedFirstName = sanitizeInput(firstName, 50);
+    const sanitizedLastName = sanitizeInput(lastName, 50);
+    
+    // Validate password strength
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.valid) {
+      logAudit(req, false, 'weak_password');
+      return res.status(400).json({ 
+        error: 'Password does not meet security requirements', 
+        details: passwordValidation.errors
+      });
+    }
+    
     // Check if user already exists
-    const existingUser = await pool.query(
-      'SELECT id FROM users WHERE email = $1',
-      [email]
+    const existingUser = await (metricsCollector?.trackDbQuery ? 
+      metricsCollector.trackDbQuery('select_user', pool.query('SELECT id FROM users WHERE email = $1', [sanitizedEmail])) :
+      pool.query('SELECT id FROM users WHERE email = $1', [sanitizedEmail])
     );
     
     if (existingUser.rows.length > 0) {
+      logAudit(req, false, 'user_exists');
       return res.status(409).json({ error: 'User already exists with this email' });
     }
     
-    // Hash password
+    // Hash password with enhanced security
     const hashedPassword = await hashPassword(password);
     
     // Create user
-    const result = await pool.query(
-      'INSERT INTO users (email, password_hash, first_name, last_name) VALUES ($1, $2, $3, $4) RETURNING id, email, first_name, last_name, created_at',
-      [email, hashedPassword, firstName, lastName]
+    const result = await (metricsCollector?.trackDbQuery ?
+      metricsCollector.trackDbQuery('insert_user',
+        pool.query(
+          'INSERT INTO users (email, password_hash, first_name, last_name) VALUES ($1, $2, $3, $4) RETURNING id, email, first_name, last_name, created_at',
+          [sanitizedEmail, hashedPassword, sanitizedFirstName, sanitizedLastName]
+        )
+      ) :
+      pool.query(
+        'INSERT INTO users (email, password_hash, first_name, last_name) VALUES ($1, $2, $3, $4) RETURNING id, email, first_name, last_name, created_at',
+        [sanitizedEmail, hashedPassword, sanitizedFirstName, sanitizedLastName]
+      )
     );
     
     const user = result.rows[0];
@@ -249,6 +545,8 @@ app.post('/auth/register', authLimiter, async (req, res) => {
     // Cache token
     await cacheUserToken(user.id, token);
     
+    // Log successful registration
+    logAudit(req, true, 'registration_success');
     logger.info('User registered successfully', { userId: user.id, email: user.email });
     
     res.status(201).json({ 
@@ -263,6 +561,7 @@ app.post('/auth/register', authLimiter, async (req, res) => {
       }
     });
   } catch (error) {
+    logAudit(req, false, 'server_error');
     logger.error('Registration error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -274,6 +573,7 @@ app.post('/auth/login', authLimiter, async (req, res) => {
     // Validate input
     const { error, value } = loginSchema.validate(req.body);
     if (error) {
+      authAttempts.labels('login', 'validation_failed').inc();
       return res.status(400).json({ 
         error: 'Validation failed', 
         details: error.details.map(d => d.message)
@@ -285,10 +585,11 @@ app.post('/auth/login', authLimiter, async (req, res) => {
     // Find user
     const result = await pool.query(
       'SELECT id, email, password_hash, first_name, last_name, created_at FROM users WHERE email = $1',
-      [email]
+      [sanitizeEmail(email)]
     );
     
     if (result.rows.length === 0) {
+      authAttempts.labels('login', 'invalid_credentials').inc();
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
@@ -297,6 +598,7 @@ app.post('/auth/login', authLimiter, async (req, res) => {
     // Verify password
     const validPassword = await verifyPassword(password, user.password_hash);
     if (!validPassword) {
+      authAttempts.labels('login', 'invalid_credentials').inc();
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
@@ -305,6 +607,10 @@ app.post('/auth/login', authLimiter, async (req, res) => {
     
     // Cache token
     await cacheUserToken(user.id, token);
+    
+    // Update metrics
+    authAttempts.labels('login', 'success').inc();
+    activeUsers.inc();
     
     logger.info('User logged in successfully', { userId: user.id, email: user.email });
     
@@ -320,6 +626,7 @@ app.post('/auth/login', authLimiter, async (req, res) => {
       }
     });
   } catch (error) {
+    authAttempts.labels('login', 'error').inc();
     logger.error('Login error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }

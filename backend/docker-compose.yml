@@ -22,6 +22,15 @@ services:
     networks:
       - task-manager-network
 
+  # Google Cloud Pub/Sub Emulator
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:emulators
+    ports:
+      - "8085:8085"
+    command: ["gcloud", "beta", "emulators", "pubsub", "start", "--host-port=0.0.0.0:8085"]
+    networks:
+      - task-manager-network
+
   auth-service:
     build: ./services/auth-service
     ports:
@@ -53,17 +62,55 @@ services:
       DB_USER: taskuser
       DB_PASSWORD: taskpassword
       AUTH_SERVICE_URL: http://auth-service:3001
+      MEDIA_SERVICE_URL: http://media-service:3003
       REDIS_URL: redis://redis:6379
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      GOOGLE_CLOUD_PROJECT: dev-project
+      GCP_PROJECT_ID: dev-project
+      PUBSUB_TOPIC: task-events
       NODE_ENV: development
     depends_on:
       - postgres
       - auth-service
       - redis
+      - pubsub-emulator
     networks:
       - task-manager-network
     volumes:
       - ./services/task-service:/app
       - /app/node_modules
+
+  media-service:
+    build: ./services/media-service
+    ports:
+      - "3003:3003"
+    environment:
+      DB_HOST: postgres
+      DB_NAME: taskmanager
+      DB_USER: taskuser
+      DB_PASSWORD: taskpassword
+      AUTH_SERVICE_URL: http://auth-service:3001
+      REDIS_URL: redis://redis:6379
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      GOOGLE_CLOUD_PROJECT: dev-project
+      GCP_PROJECT_ID: dev-project
+      GCS_BUCKET: dev-task-manager-media
+      PUBSUB_TOPIC: task-events
+      NODE_ENV: development
+      # For local development, we'll use fake GCS or local storage
+      USE_LOCAL_STORAGE: "true"
+      LOCAL_STORAGE_PATH: /app/uploads
+    depends_on:
+      - postgres
+      - auth-service
+      - redis
+      - pubsub-emulator
+    networks:
+      - task-manager-network
+    volumes:
+      - ./services/media-service:/app
+      - /app/node_modules
+      - media_uploads:/app/uploads
 
   api-gateway:
     build: ./services/api-gateway
@@ -72,11 +119,13 @@ services:
     environment:
       AUTH_SERVICE_URL: http://auth-service:3001
       TASK_SERVICE_URL: http://task-service:3002
+      MEDIA_SERVICE_URL: http://media-service:3003
       NODE_ENV: development
       CORS_ORIGIN: http://localhost:3100
     depends_on:
       - auth-service
       - task-service
+      - media-service
     networks:
       - task-manager-network
     volumes:
@@ -85,6 +134,7 @@ services:
 
 volumes:
   postgres_data:
+  media_uploads:
 
 networks:
   task-manager-network:

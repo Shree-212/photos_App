@@ -29,7 +29,10 @@
     "lucide-react": "^0.292.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.0.0",
-    "tailwind-merge": "^2.0.0"
+    "tailwind-merge": "^2.0.0",
+    "react-dropzone": "^14.2.3",
+    "swiper": "^11.0.5",
+    "date-fns": "^2.30.0"
   },
   "devDependencies": {
     "eslint": "^8",

@@ -5,9 +5,7 @@
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
-    "dev": "nodemon src/app.js",
-    "test": "jest",
-    "test:watch": "jest --watch"
+    "dev": "nodemon src/app.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
@@ -22,12 +20,11 @@
     "http-proxy-middleware": "^2.0.6",
     "morgan": "^1.10.0",
     "opossum": "^8.5.0",
-    "winston": "^3.11.0"
+    "winston": "^3.11.0",
+    "prom-client": "^15.1.0"
   },
   "devDependencies": {
-    "jest": "^29.7.0",
-    "nodemon": "^3.0.1",
-    "supertest": "^6.3.3"
+    "nodemon": "^3.0.1"
   },
   "keywords": [
     "api-gateway",

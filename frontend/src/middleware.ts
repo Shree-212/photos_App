@@ -9,7 +9,12 @@ export function middleware(request: NextRequest) {
   const publicRoutes = ['/auth/login', '/auth/register'];
   
   // Define protected routes that require authentication
-  const protectedRoutes = ['/dashboard'];
+  const protectedRoutes = ['/dashboard', '/tasks'];
+
+  // Redirect /tasks to /dashboard to maintain single entry point
+  if (pathname === '/tasks') {
+    return NextResponse.redirect(new URL('/dashboard', request.url));
+  }
 
   // If user has no token and tries to access protected route
   if (!token && protectedRoutes.some(route => pathname.startsWith(route))) {

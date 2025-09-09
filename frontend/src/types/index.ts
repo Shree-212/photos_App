@@ -7,16 +7,33 @@ export interface User {
   updatedAt?: string;
 }
 
+export interface MediaFile {
+  id: number;
+  filename: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  thumbnailPath?: string;
+  thumbnailUrl?: string;
+  createdAt: string;
+}
+
 export interface Task {
   id: number;
   title: string;
-  description: string;
+  description?: string;
   status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
   priority: 'low' | 'medium' | 'high';
-  due_date?: string;
-  user_id: number;
-  created_at: string;
-  updated_at: string;
+  dueDate?: string;
+  userId: number;
+  createdAt: string;
+  updatedAt: string;
+  assignedTo?: {
+    id: number;
+    name: string;
+    avatar?: string;
+  };
+  media?: MediaFile[];
 }
 
 export interface CreateTaskData {
@@ -25,6 +42,7 @@ export interface CreateTaskData {
   priority?: 'low' | 'medium' | 'high';
   status?: 'pending' | 'in-progress' | 'completed' | 'cancelled';
   dueDate?: string;
+  mediaIds?: number[];
 }
 
 export interface UpdateTaskData {
@@ -33,6 +51,7 @@ export interface UpdateTaskData {
   priority?: 'low' | 'medium' | 'high';
   status?: 'pending' | 'in-progress' | 'completed' | 'cancelled';
   dueDate?: string;
+  mediaIds?: number[];
 }
 
 export interface TasksResponse {

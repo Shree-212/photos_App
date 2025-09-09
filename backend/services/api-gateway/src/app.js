@@ -32,7 +32,8 @@ const logger = winston.createLogger({
 // Service URLs
 const services = {
   auth: process.env.AUTH_SERVICE_URL || 'http://auth-service:3001',
-  task: process.env.TASK_SERVICE_URL || 'http://task-service:3002'
+  task: process.env.TASK_SERVICE_URL || 'http://task-service:3002',
+  media: process.env.MEDIA_SERVICE_URL || 'http://media-service:3003'
 };
 
 // Circuit breaker options
@@ -77,6 +78,7 @@ const createServiceCall = (serviceName) => {
 // Create circuit breakers for each service
 const authCircuitBreaker = createServiceCall('auth-service');
 const taskCircuitBreaker = createServiceCall('task-service');
+const mediaCircuitBreaker = createServiceCall('media-service');
 
 // Middleware
 app.use(helmet());
@@ -177,7 +179,8 @@ const checkServiceHealth = async (serviceName, url, circuitBreaker) => {
 app.get('/health', async (req, res) => {
   const healthChecks = await Promise.all([
     checkServiceHealth('auth-service', services.auth, authCircuitBreaker),
-    checkServiceHealth('task-service', services.task, taskCircuitBreaker)
+    checkServiceHealth('task-service', services.task, taskCircuitBreaker),
+    checkServiceHealth('media-service', services.media, mediaCircuitBreaker)
   ]);
   
   const allHealthy = healthChecks.every(check => check.status === 'healthy');
@@ -196,6 +199,10 @@ app.get('/health', async (req, res) => {
       'task-service': {
         state: taskCircuitBreaker.opened ? 'open' : 'closed',
         stats: taskCircuitBreaker.stats
+      },
+      'media-service': {
+        state: mediaCircuitBreaker.opened ? 'open' : 'closed',
+        stats: mediaCircuitBreaker.stats
       }
     }
   });
@@ -316,6 +323,15 @@ const createExpressProxy = (target, circuitBreaker = null) => {
         // Handle root path case
         if (newPath === '/tasks/') {
           newPath = '/tasks';
+        }
+      }
+      
+      // For media service, req.url is already stripped, just add /media prefix
+      if (req.originalUrl.startsWith('/api/media')) {
+        newPath = '/media' + req.url;
+        // Handle root path case
+        if (newPath === '/media/') {
+          newPath = '/media';
         }
       }
       
@@ -489,6 +505,53 @@ app.use('/api/tasks',
   }
 );
 
+// Media service routes with special handling for file uploads
+app.use('/api/media',
+  withCircuitBreaker(mediaCircuitBreaker, 'media-service'),
+  (req, res, next) => {
+    // Special handling for file uploads (multipart/form-data)
+    if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
+      logger.debug('Using http-proxy-middleware for media upload:', {
+        method: req.method,
+        originalUrl: req.originalUrl,
+        contentType: req.headers['content-type']
+      });
+      
+      // Use http-proxy-middleware for file uploads (better stream handling)
+      return createEnhancedProxy(services.media, {
+        '^/api/media': '/media'
+      }, mediaCircuitBreaker)(req, res, next);
+    } else if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+      // Use express-http-proxy for JSON requests with body
+      logger.debug('Using express-http-proxy for media request:', {
+        method: req.method,
+        originalUrl: req.originalUrl,
+        url: req.url,
+        path: req.path
+      });
+      
+      const expressProxy = createExpressProxy(services.media, mediaCircuitBreaker);
+      return expressProxy(req, res, next);
+    } else {
+      // Use http-proxy-middleware for GET requests
+      logger.debug('Using http-proxy-middleware for media request:', {
+        method: req.method,
+        originalUrl: req.originalUrl
+      });
+      
+      return createEnhancedProxy(services.media, {
+        '^/api/media': '/media'
+      }, mediaCircuitBreaker)(req, res, next);
+    }
+  }
+);
+
+// Direct media access (bypassing /api prefix for frontend convenience)
+app.use('/media',
+  withCircuitBreaker(mediaCircuitBreaker, 'media-service'),
+  createEnhancedProxy(services.media, {}, mediaCircuitBreaker)
+);
+
 // Alternative direct routing with circuit breaker (for debugging and fallback)
 app.get('/api/direct/auth/health', async (req, res) => {
   try {
@@ -542,6 +605,32 @@ app.get('/api/direct/tasks/health', async (req, res) => {
   }
 });
 
+app.get('/api/direct/media/health', async (req, res) => {
+  try {
+    let response;
+    if (mediaCircuitBreaker.opened) {
+      return res.status(503).json({ 
+        error: 'Media service circuit breaker is open',
+        circuitBreakerState: 'open'
+      });
+    }
+    
+    response = await mediaCircuitBreaker.fire(`${services.media}/health`, { timeout: 5000 });
+    res.json({
+      ...response.data,
+      circuitBreakerState: 'closed',
+      directCall: true
+    });
+  } catch (error) {
+    logger.error('Direct media health check failed:', error.message);
+    res.status(502).json({ 
+      error: 'Media service unavailable',
+      message: error.message,
+      circuitBreakerState: mediaCircuitBreaker.opened ? 'open' : 'closed'
+    });
+  }
+});
+
 // Circuit breaker status endpoint for monitoring
 app.get('/api/circuit-breakers', (req, res) => {
   res.json({
@@ -556,6 +645,12 @@ app.get('/api/circuit-breakers', (req, res) => {
       state: taskCircuitBreaker.opened ? 'open' : (taskCircuitBreaker.halfOpen ? 'half-open' : 'closed'),
       stats: taskCircuitBreaker.stats,
       options: taskCircuitBreaker.options
+    },
+    'media-service': {
+      name: mediaCircuitBreaker.name,
+      state: mediaCircuitBreaker.opened ? 'open' : (mediaCircuitBreaker.halfOpen ? 'half-open' : 'closed'),
+      stats: mediaCircuitBreaker.stats,
+      options: mediaCircuitBreaker.options
     },
     timestamp: new Date().toISOString()
   });
@@ -576,11 +671,21 @@ app.get('/api/proxy-info', (req, res) => {
         'GET requests': 'http-proxy-middleware', 
         'POST/PUT/PATCH requests': 'express-http-proxy',
         reason: 'express-http-proxy handles request bodies better'
+      },
+      '/api/media': {
+        'GET requests': 'http-proxy-middleware',
+        'File uploads (multipart)': 'http-proxy-middleware',
+        'POST/PUT/PATCH (JSON)': 'express-http-proxy',
+        reason: 'http-proxy-middleware handles file streams better, express-http-proxy for JSON'
+      },
+      '/media': {
+        'All requests': 'http-proxy-middleware',
+        reason: 'Direct media access for downloads and thumbnails'
       }
     },
     circuitBreakers: {
       enabled: true,
-      services: ['auth-service', 'task-service'],
+      services: ['auth-service', 'task-service', 'media-service'],
       configuration: circuitBreakerOptions
     },
     timestamp: new Date().toISOString()
@@ -615,8 +720,31 @@ app.get('/api', (req, res) => {
           'GET /api/tasks/:id',
           'PUT /api/tasks/:id',
           'DELETE /api/tasks/:id',
+          'POST /api/tasks/:id/media',
+          'DELETE /api/tasks/:id/media/:mediaId',
+          'GET /api/tasks/:id/media',
           'GET /api/tasks/stats/summary'
         ]
+      },
+      media: {
+        base: '/api/media',
+        service: services.media,
+        routes: [
+          'POST /api/media/upload',
+          'GET /api/media',
+          'GET /api/media/:id',
+          'GET /api/media/:id/download',
+          'GET /api/media/:id/thumbnail',
+          'DELETE /api/media/:id'
+        ],
+        direct: {
+          base: '/media',
+          service: services.media,
+          routes: [
+            'GET /media/:id/download',
+            'GET /media/:id/thumbnail'
+          ]
+        }
       }
     },
     health: '/health',
@@ -650,7 +778,7 @@ app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
     message: `The requested endpoint ${req.method} ${req.originalUrl} was not found`,
-    availableEndpoints: ['/api/auth/*', '/api/tasks/*', '/health', '/api'],
+    availableEndpoints: ['/api/auth/*', '/api/tasks/*', '/api/media/*', '/media/*', '/health', '/api'],
     timestamp: new Date().toISOString()
   });
 });

@@ -21,11 +21,50 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Create media table
+CREATE TABLE IF NOT EXISTS media (
+    id SERIAL PRIMARY KEY,
+    filename VARCHAR(255) NOT NULL,
+    original_name VARCHAR(255) NOT NULL,
+    mime_type VARCHAR(100) NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    gcs_path VARCHAR(500),
+    local_path VARCHAR(500),
+    thumbnail_path VARCHAR(500),
+    width INTEGER,
+    height INTEGER,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create task_media junction table
+CREATE TABLE IF NOT EXISTS task_media (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+    media_id INTEGER REFERENCES media(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(task_id, media_id)
+);
+
+-- Create migration_history table
+CREATE TABLE IF NOT EXISTS migration_history (
+    id SERIAL PRIMARY KEY,
+    version VARCHAR(255) NOT NULL UNIQUE,
+    description TEXT,
+    executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    rollback_script TEXT
+);
+
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_tasks_user_id ON tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_media_user_id ON media(user_id);
+CREATE INDEX IF NOT EXISTS idx_media_filename ON media(filename);
+CREATE INDEX IF NOT EXISTS idx_task_media_task_id ON task_media(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_media_media_id ON task_media(media_id);
 
 -- Insert sample data for testing
 INSERT INTO users (email, password_hash, first_name, last_name) VALUES 
@@ -44,3 +83,4 @@ $$ language 'plpgsql';
 -- Create triggers for updated_at
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_media_updated_at BEFORE UPDATE ON media FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

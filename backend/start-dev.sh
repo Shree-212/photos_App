@@ -55,7 +55,7 @@ check_files() {
 install_dependencies() {
     print_status "Installing dependencies for all services..."
     
-    services=("auth-service" "task-service" "api-gateway")
+    services=("auth-service" "task-service" "media-service" "api-gateway")
     
     for service in "${services[@]}"; do
         if [ -d "services/$service" ]; then
@@ -90,48 +90,123 @@ wait_for_services() {
     
     # Wait for database
     print_status "Waiting for PostgreSQL..."
-    while ! docker-compose exec postgres pg_isready -U taskuser -d taskmanager >/dev/null 2>&1; do
+    local postgres_ready=false
+    for i in {1..60}; do
+        if docker-compose exec -T postgres pg_isready -U taskuser -d taskmanager >/dev/null 2>&1; then
+            postgres_ready=true
+            break
+        fi
         sleep 1
         echo -n "."
     done
     echo ""
-    print_status "PostgreSQL is ready ✓"
+    
+    if [ "$postgres_ready" = true ]; then
+        print_status "PostgreSQL is ready ✓"
+    else
+        print_error "PostgreSQL failed to start within 60 seconds"
+        print_status "PostgreSQL logs:"
+        docker-compose logs postgres | tail -20
+        return 1
+    fi
     
     # Wait for Redis
     print_status "Waiting for Redis..."
-    while ! docker-compose exec redis redis-cli ping >/dev/null 2>&1; do
+    local redis_ready=false
+    for i in {1..30}; do
+        if docker-compose exec -T redis redis-cli ping >/dev/null 2>&1; then
+            redis_ready=true
+            break
+        fi
         sleep 1
         echo -n "."
     done
     echo ""
-    print_status "Redis is ready ✓"
+    
+    if [ "$redis_ready" = true ]; then
+        print_status "Redis is ready ✓"
+    else
+        print_warning "Redis not ready after 30 seconds, but continuing..."
+    fi
     
     # Wait for auth service
     print_status "Waiting for Auth Service..."
-    while ! curl -s http://localhost:3001/health >/dev/null 2>&1; do
+    local auth_ready=false
+    for i in {1..60}; do
+        if curl -s http://localhost:3001/health >/dev/null 2>&1; then
+            auth_ready=true
+            break
+        fi
         sleep 1
         echo -n "."
     done
     echo ""
-    print_status "Auth Service is ready ✓"
+    
+    if [ "$auth_ready" = true ]; then
+        print_status "Auth Service is ready ✓"
+    else
+        print_error "Auth Service failed to start within 60 seconds"
+        print_status "Auth Service logs:"
+        docker-compose logs auth-service | tail -20
+        return 1
+    fi
     
     # Wait for task service
     print_status "Waiting for Task Service..."
-    while ! curl -s http://localhost:3002/health >/dev/null 2>&1; do
+    local task_ready=false
+    for i in {1..60}; do
+        if curl -s http://localhost:3002/health >/dev/null 2>&1; then
+            task_ready=true
+            break
+        fi
         sleep 1
         echo -n "."
     done
     echo ""
-    print_status "Task Service is ready ✓"
+    
+    if [ "$task_ready" = true ]; then
+        print_status "Task Service is ready ✓"
+    else
+        print_warning "Task Service not ready after 60 seconds, but continuing..."
+    fi
+    
+    # Wait for media service
+    print_status "Waiting for Media Service..."
+    local media_ready=false
+    for i in {1..60}; do
+        if curl -s http://localhost:3003/health >/dev/null 2>&1; then
+            media_ready=true
+            break
+        fi
+        sleep 1
+        echo -n "."
+    done
+    echo ""
+    
+    if [ "$media_ready" = true ]; then
+        print_status "Media Service is ready ✓"
+    else
+        print_warning "Media Service not ready after 60 seconds, but continuing..."
+    fi
     
     # Wait for API Gateway
     print_status "Waiting for API Gateway..."
-    while ! curl -s http://localhost:3000/health >/dev/null 2>&1; do
+    local gateway_ready=false
+    for i in {1..60}; do
+        if curl -s http://localhost:3000/health >/dev/null 2>&1; then
+            gateway_ready=true
+            break
+        fi
         sleep 1
         echo -n "."
     done
     echo ""
-    print_status "API Gateway is ready ✓"
+    
+    if [ "$gateway_ready" = true ]; then
+        print_status "API Gateway is ready ✓"
+    else
+        print_warning "API Gateway not ready after 60 seconds, but continuing..."
+    fi
 }
 
 # Show service status
@@ -143,10 +218,12 @@ show_status() {
     print_status "Service URLs:"
     echo "  🔐 Auth Service:    http://localhost:3001"
     echo "  📋 Task Service:    http://localhost:3002"
+    echo "  🖼️  Media Service:   http://localhost:3003"
     echo "  🌐 API Gateway:     http://localhost:3000"
     echo "  📚 API Docs:        http://localhost:3000/api/docs"
     echo "  🗄️  PostgreSQL:     localhost:5432"
     echo "  🔴 Redis:           localhost:6379"
+    echo "  📡 Pub/Sub Emulator: localhost:8085"
     
     echo ""
     print_status "Test the API:"
@@ -156,7 +233,7 @@ show_status() {
     echo ""
     print_status "View logs:"
     echo "  docker-compose logs -f [service-name]"
-    echo "  Services: auth-service, task-service, api-gateway, postgres, redis"
+    echo "  Services: auth-service, task-service, media-service, api-gateway, postgres, redis, pubsub-emulator"
     
     echo ""
     print_status "Stop services:"
@@ -178,14 +255,23 @@ main() {
     fi
     
     start_services
-    wait_for_services
-    show_status
     
-    print_status "🎉 All services are up and running!"
-    print_warning "Press Ctrl+C to stop all services"
-    
-    # Keep script running to show logs
-    docker-compose logs -f
+    if wait_for_services; then
+        show_status
+        print_status "🎉 All services are up and running!"
+        print_warning "Press Ctrl+C to stop all services"
+        
+        # Keep script running to show logs
+        docker-compose logs -f
+    else
+        print_error "Some services failed to start properly"
+        print_status "Current service status:"
+        docker-compose ps
+        print_status "You can check individual service logs with:"
+        print_status "  docker-compose logs [service-name]"
+        print_status "  Available services: auth-service, task-service, media-service, api-gateway, postgres, redis"
+        exit 1
+    fi
 }
 
 # Handle Ctrl+C

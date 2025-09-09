@@ -25,6 +25,8 @@ spec:
       port: 3001
     - protocol: TCP
       port: 3002
+    - protocol: TCP
+      port: 3003
   egress:
   - to:
     - namespaceSelector:
