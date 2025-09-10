@@ -102,10 +102,11 @@ const tracingManager = new SimpleTracingManager('auth-service', logger);
 
 // Middleware with fallbacks
 app.use(securityHeaders || helmet());
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
-  credentials: true
-}));
+// CORS removed - handled by API gateway
+// app.use(cors({
+//   origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
+//   credentials: true
+// }));
 
 // Add tracing middleware early in the chain
 app.use(tracingManager.createExpressMiddleware());

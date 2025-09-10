@@ -101,10 +101,11 @@ const tracingManager = new SimpleTracingManager('task-service', logger);
 
 // Middleware
 app.use(helmet());
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
-  credentials: true
-}));
+// CORS removed - handled by API gateway
+// app.use(cors({
+//   origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
+//   credentials: true
+// }));
 
 // Add tracing middleware before other middleware
 app.use(tracingManager.createExpressMiddleware());

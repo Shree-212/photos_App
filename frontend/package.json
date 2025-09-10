@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev -p 3100",
     "build": "next build",
-    "start": "next start -p 3100",
+    "start": "node server-with-proxy.js",
+    "start:next": "next start -p 3100",
     "lint": "next lint"
   },
   "dependencies": {
@@ -32,7 +33,10 @@
     "tailwind-merge": "^2.0.0",
     "react-dropzone": "^14.2.3",
     "swiper": "^11.0.5",
-    "date-fns": "^2.30.0"
+    "date-fns": "^2.30.0",
+    "express": "^4.18.2",
+    "http-proxy-middleware": "^2.0.6",
+    "cors": "^2.8.5"
   },
   "devDependencies": {
     "eslint": "^8",

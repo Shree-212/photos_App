@@ -4,25 +4,26 @@ metadata:
   name: app-config
   namespace: task-manager
 data:
-  # Database Configuration
-  db-host: "postgresql-service"
+  # Database Configuration  
+  db-host: "34.122.121.162"  # Public Cloud SQL IP
   db-name: "taskmanager"
-  
-  # Redis Configuration
-  redis-url: "redis://redis-service:6379"
+  db-user: "taskuser"
   
   # Service URLs (internal cluster communication)
   auth-service-url: "http://auth-service:80"
   task-service-url: "http://task-service:80"
   media-service-url: "http://media-service:80"
   notification-service-url: "http://notification-service:80"
+  frontend-service-url: "http://frontend-service:80"
   
-  # Frontend Configuration
-  cors-origin: "https://your-frontend-domain.com"
+  # Frontend Configuration - using the current LoadBalancer IPs
+  cors-origin: "*"  # Allowing all origins for now
+  api-gateway-url: "http://34.42.213.184"
+  frontend-url: "http://34.134.60.168"
   
   # Google Cloud Configuration
-  gcp-project-id: "your-gcp-project-id"
-  gcs-bucket: "taskmanager-media-production"
+  gcp-project-id: "circular-hash-459513-q5"
+  gcs-bucket: "taskmanager-media-circular-hash-459513-q5"
   pubsub-topic: "task-manager-events"
   
   # Logging Configuration

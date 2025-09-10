@@ -118,10 +118,11 @@ if (process.env.USE_LOCAL_STORAGE !== 'true') {
 
 // Security middleware
 app.use(helmet());
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
-  credentials: true
-}));
+// CORS removed - handled by API gateway
+// app.use(cors({
+//   origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
+//   credentials: true
+// }));
 
 // Add tracing middleware early
 app.use(tracingManager.createExpressMiddleware());

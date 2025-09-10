@@ -2,12 +2,13 @@ import axios from 'axios';
 import Cookies from 'js-cookie';
 import { AuthResponse, LoginData, RegisterData, User } from '../types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 // Create axios instance
 const api = axios.create({
-  baseURL: `${API_BASE_URL}`,  // Remove /api prefix for direct service access
-  timeout: 10000,
+  baseURL: `${API_BASE_URL}`,  // Use same origin for API requests
+  timeout: 30000, // Increased to 30 seconds for LoadBalancer delays
+  withCredentials: true,  // Include credentials for CORS
   headers: {
     'Content-Type': 'application/json',
   },

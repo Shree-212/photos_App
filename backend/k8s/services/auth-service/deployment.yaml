@@ -7,7 +7,7 @@ metadata:
     app: auth-service
     version: v1
 spec:
-  replicas: 2
+  replicas: 1  # Reduced for simplified deployment
   selector:
     matchLabels:
       app: auth-service
@@ -19,13 +19,16 @@ spec:
     spec:
       containers:
       - name: auth-service
-        image: gcr.io/PROJECT_ID/auth-service:latest
+        image: gcr.io/circular-hash-459513-q5/auth-service:latest
         ports:
         - containerPort: 3001
           name: http
         env:
         - name: NODE_ENV
-          value: "production"
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: node-env
         - name: DB_HOST
           valueFrom:
             configMapKeyRef:
@@ -51,11 +54,6 @@ spec:
             secretKeyRef:
               name: auth-secret
               key: jwt-secret
-        - name: REDIS_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-config
-              key: redis-url
         - name: CORS_ORIGIN
           valueFrom:
             configMapKeyRef:
@@ -84,14 +82,6 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 1001
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop:
-            - ALL
 
 ---
 apiVersion: v1

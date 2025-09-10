@@ -7,7 +7,7 @@ metadata:
     app: task-service
     version: v1
 spec:
-  replicas: 2
+  replicas: 1  # Reduced for simplified deployment
   selector:
     matchLabels:
       app: task-service
@@ -19,13 +19,16 @@ spec:
     spec:
       containers:
       - name: task-service
-        image: gcr.io/PROJECT_ID/task-service:latest
+        image: gcr.io/circular-hash-459513-q5/task-service:latest
         ports:
         - containerPort: 3002
           name: http
         env:
         - name: NODE_ENV
-          value: "production"
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: node-env
         - name: DB_HOST
           valueFrom:
             configMapKeyRef:

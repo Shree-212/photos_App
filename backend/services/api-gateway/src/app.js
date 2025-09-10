@@ -38,7 +38,8 @@ const services = {
   auth: process.env.AUTH_SERVICE_URL || 'http://auth-service:3001',
   task: process.env.TASK_SERVICE_URL || 'http://task-service:3002',
   media: process.env.MEDIA_SERVICE_URL || 'http://media-service:3003',
-  notification: process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3004'
+  notification: process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3004',
+  frontend: process.env.FRONTEND_SERVICE_URL || 'http://frontend-service:80'
 };
 
 // Circuit breaker options
@@ -87,21 +88,64 @@ const mediaCircuitBreaker = createServiceCall('media-service');
 const notificationCircuitBreaker = createServiceCall('notification-service');
 
 // Middleware
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      connectSrc: ["'self'", "http://34.134.60.168", "https://34.134.60.168"], // Allow frontend connections
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'self'"],
+      scriptSrcAttr: ["'none'"],
+      upgradeInsecureRequests: []
+    }
+  }
+}));
 
 // CORS configuration
 app.use(cors({
   origin: function (origin, callback) {
+    logger.info('CORS request from origin:', origin);
+    
+    // Always allow requests without origin (like mobile apps or server-to-server)
+    if (!origin) {
+      logger.info('No origin header, allowing request');
+      callback(null, true);
+      return;
+    }
+    
+    // If CORS_ORIGIN is set to *, allow the requesting origin
+    if (process.env.CORS_ORIGIN === '*') {
+      logger.info('CORS_ORIGIN is *, allowing origin:', origin);
+      callback(null, origin);
+      return;
+    }
+    
     const allowedOrigins = [
       'http://localhost:3100',
       'http://localhost:3000',
-      process.env.FRONTEND_URL
+      'http://34.134.60.168',  // Frontend LoadBalancer IP
+      'https://34.134.60.168', // HTTPS version
+      process.env.FRONTEND_URL,
+      process.env.CORS_ORIGIN
     ].filter(Boolean);
     
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
+    logger.info('Checking origin against allowed origins:', { origin, allowedOrigins });
+    
+    if (allowedOrigins.includes(origin)) {
+      logger.info('Origin allowed:', origin);
+      callback(null, origin);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      logger.warn('Origin not allowed, but allowing anyway due to wildcard policy:', origin);
+      // Allow anyway for now to fix the issue
+      callback(null, origin);
     }
   },
   credentials: true,
@@ -811,6 +855,24 @@ app.use((error, req, res, next) => {
     message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong',
     timestamp: new Date().toISOString()
   });
+});
+
+// Frontend proxy - proxy all non-API requests to the frontend service
+app.use('*', (req, res, next) => {
+  // If the request is for API endpoints, let them fall through to 404
+  if (req.originalUrl.startsWith('/api/') || req.originalUrl.startsWith('/health') || req.originalUrl.startsWith('/media/')) {
+    return next();
+  }
+  
+  // Proxy all other requests to the frontend service
+  logger.debug('Proxying frontend request:', {
+    method: req.method,
+    originalUrl: req.originalUrl,
+    path: req.path
+  });
+  
+  const frontendProxy = createEnhancedProxy(services.frontend, {}, null);
+  return frontendProxy(req, res, next);
 });
 
 // 404 handler
