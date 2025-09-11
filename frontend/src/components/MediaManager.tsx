@@ -394,17 +394,17 @@ export const MediaManager: React.FC<MediaManagerProps> = ({
                   }`}
                 />
                 
-                {/* Action buttons overlay */}
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center space-x-2">
+                {/* Action buttons - positioned to not interfere with selection */}
+                <div className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleViewMedia(mediaItem);
                     }}
-                    className="p-2 bg-white/90 hover:bg-white rounded-full shadow-lg text-gray-700 hover:text-gray-900 transition-colors"
+                    className="p-1.5 bg-white/90 hover:bg-white rounded-full shadow-lg text-gray-700 hover:text-gray-900 transition-colors"
                     title="View Full Size"
                   >
-                    <Eye className="h-4 w-4" />
+                    <Eye className="h-3 w-3" />
                   </button>
                   <button
                     onClick={(e) => {
@@ -412,10 +412,10 @@ export const MediaManager: React.FC<MediaManagerProps> = ({
                       handleDeleteMedia(mediaItem);
                     }}
                     disabled={loading}
-                    className="p-2 bg-white/90 hover:bg-white rounded-full shadow-lg text-red-600 hover:text-red-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className="p-1.5 bg-white/90 hover:bg-white rounded-full shadow-lg text-red-600 hover:text-red-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     title="Delete File"
                   >
-                    <Trash2 className="h-4 w-4" />
+                    <Trash2 className="h-3 w-3" />
                   </button>
                 </div>
                 
@@ -485,7 +485,7 @@ export const MediaManager: React.FC<MediaManagerProps> = ({
 
       {/* Media carousel modal */}
       {showCarousel && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-4">
           <div className="w-full max-w-4xl max-h-full">
             <MediaCarousel
               media={filteredMedia}
