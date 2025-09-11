@@ -7,7 +7,7 @@ metadata:
     app: media-service
     version: v1
 spec:
-  replicas: 1  # Reduced for simplified deployment
+  replicas: 1
   selector:
     matchLabels:
       app: media-service
@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: media-service
-        image: gcr.io/circular-hash-459513-q5/media-service:latest
+        image: gcr.io/circular-hash-459513-q5/media-service:cors-fixed
         ports:
         - containerPort: 3003
           name: http
@@ -59,7 +59,7 @@ spec:
             configMapKeyRef:
               name: app-config
               key: gcp-project-id
-        - name: GCS_BUCKET
+        - name: GOOGLE_CLOUD_STORAGE_BUCKET
           valueFrom:
             configMapKeyRef:
               name: app-config
@@ -78,13 +78,15 @@ spec:
               key: log-level
         - name: GOOGLE_APPLICATION_CREDENTIALS
           value: "/var/secrets/google/key.json"
+        - name: REDIS_URL
+          value: "redis://redis.task-manager.svc.cluster.local:6379"
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "200m"
+            memory: "96Mi"
+            cpu: "25m"
           limits:
-            memory: "1Gi"
-            cpu: "1000m"
+            memory: "192Mi"
+            cpu: "200m"
         livenessProbe:
           httpGet:
             path: /health

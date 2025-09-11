@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import axios from 'axios';
+import { authApi } from '../../../lib/auth';
 
 export default function RegisterPage() {
   const [formData, setFormData] = useState({
@@ -29,7 +29,7 @@ export default function RegisterPage() {
     }
 
     try {
-      await axios.post('http://localhost:3001/auth/register', {
+      const response = await authApi.register({
         firstName: formData.firstName,
         lastName: formData.lastName,
         email: formData.email,
@@ -38,7 +38,7 @@ export default function RegisterPage() {
       
       router.push('/auth/login');
     } catch (error: any) {
-      setError(error.response?.data?.message || 'Registration failed');
+      setError(error.response?.data?.error || error.response?.data?.message || 'Registration failed');
     } finally {
       setLoading(false);
     }

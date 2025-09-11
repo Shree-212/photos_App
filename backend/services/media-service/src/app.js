@@ -22,6 +22,9 @@ require('dotenv').config();
 
 const app = express();
 
+// Trust proxy for accurate client IP detection
+app.set('trust proxy', true);
+
 // Prometheus metrics
 const register = new promClient.Registry();
 promClient.collectDefaultMetrics({ register });
@@ -118,23 +121,46 @@ if (process.env.USE_LOCAL_STORAGE !== 'true') {
 
 // Security middleware
 app.use(helmet());
-// CORS removed - handled by API gateway
-// app.use(cors({
-//   origin: process.env.CORS_ORIGIN || 'http://localhost:3100',
-//   credentials: true
-// }));
+
+// CORS support for browser requests (including preflight)
+app.use(cors({
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    // Allow frontend origin
+    if (origin.includes('34.134.60.168') || origin.includes('localhost')) {
+      return callback(null, true);
+    }
+    
+    return callback(null, true); // Allow all for now
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
 
 // Add tracing middleware early
 app.use(tracingManager.createExpressMiddleware());
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.'
-});
+// Rate limiting disabled for media service (handled by API gateway)
+// const limiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   max: 100, // limit each IP to 100 requests per windowMs
+//   message: 'Too many requests from this IP, please try again later.',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   // Configure for production behind proxy
+//   keyGenerator: (req) => {
+//     return req.ip;
+//   },
+//   skip: (req) => {
+//     // Skip rate limiting for health checks
+//     return req.path === '/health' || req.path === '/metrics';
+//   }
+// });
 
-app.use(limiter);
+// app.use(limiter);
 
 // Prometheus middleware
 app.use(promMiddleware({
@@ -174,14 +200,30 @@ const authenticateToken = async (req, res, next) => {
 
   try {
     // Verify token with auth service
-    const response = await axios.post(`${process.env.AUTH_SERVICE_URL || 'http://localhost:3001'}/auth/verify`, {}, {
-      headers: { authorization: `Bearer ${token}` }
+    const authUrl = `${process.env.AUTH_SERVICE_URL || 'http://localhost:3001'}/auth/verify`;
+    logger.info('Making auth request to:', { authUrl });
+    
+    const response = await axios.post(authUrl, {}, {
+      headers: { authorization: `Bearer ${token}` },
+      timeout: 5000
     });
     
+    logger.info('Auth response received:', { status: response.status, data: response.data });
     req.user = response.data.user;
     next();
   } catch (error) {
-    logger.error('Token verification failed:', error.message);
+    logger.error('Token verification failed:', {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      code: error.code,
+      config: {
+        url: error.config?.url,
+        method: error.config?.method,
+        headers: error.config?.headers
+      }
+    });
     return res.status(403).json({ error: 'Invalid token' });
   }
 };
@@ -199,6 +241,12 @@ const uploadSchema = Joi.object({
 // Event publishing helper
 const publishEvent = async (eventType, data, correlationId = null) => {
   try {
+    // Skip if Pub/Sub is not configured
+    if (!pubsub || process.env.USE_LOCAL_STORAGE === 'true') {
+      logger.info('Event skipped (Pub/Sub not configured):', { eventType });
+      return;
+    }
+
     const event = {
       eventType,
       timestamp: new Date().toISOString(),
@@ -212,7 +260,10 @@ const publishEvent = async (eventType, data, correlationId = null) => {
     
     logger.info('Event published:', { eventType, correlationId: event.correlationId });
   } catch (error) {
-    logger.error('Failed to publish event:', error.message);
+    logger.warn('Failed to publish event (non-critical):', { 
+      eventType, 
+      error: error.message 
+    });
   }
 };
 
@@ -522,13 +573,17 @@ app.get('/media/:id/thumbnail', authenticateToken, async (req, res) => {
 
     const cacheKey = `thumbnail:${mediaFile.id}:${width}x${height}`;
     
-    // Check cache first
-    const cachedThumbnail = await redis.get(cacheKey);
-    if (cachedThumbnail) {
-      const thumbnailBuffer = Buffer.from(cachedThumbnail, 'base64');
-      res.setHeader('Content-Type', 'image/jpeg');
-      res.setHeader('Cache-Control', 'public, max-age=86400'); // 24 hours
-      return res.send(thumbnailBuffer);
+    // Check cache first (with error handling)
+    try {
+      const cachedThumbnail = await redis.get(cacheKey);
+      if (cachedThumbnail) {
+        const thumbnailBuffer = Buffer.from(cachedThumbnail, 'base64');
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400'); // 24 hours
+        return res.send(thumbnailBuffer);
+      }
+    } catch (redisError) {
+      logger.warn('Redis cache check failed for thumbnail:', redisError.message);
     }
 
     // Generate thumbnail
@@ -544,32 +599,53 @@ app.get('/media/:id/thumbnail', authenticateToken, async (req, res) => {
       try {
         fileBuffer = await fs.readFile(filePath);
       } catch (error) {
+        logger.error('Local file read failed:', error.message);
         return res.status(404).json({ error: 'File not found in local storage' });
       }
     } else {
       // Google Cloud Storage
-      const file = bucket.file(mediaFile.gcs_path);
-      [fileBuffer] = await file.download();
+      try {
+        const file = bucket.file(mediaFile.gcs_path);
+        [fileBuffer] = await file.download();
+      } catch (gcsError) {
+        logger.error('GCS file download failed:', gcsError.message);
+        return res.status(404).json({ error: 'File not found in storage' });
+      }
     }
     
-    const thumbnailBuffer = await sharp(fileBuffer)
-      .resize(parseInt(width), parseInt(height), {
-        fit: sharp.fit.cover,
-        position: sharp.strategy.entropy
-      })
-      .jpeg({ quality: 80 })
-      .toBuffer();
+    // Generate thumbnail using Sharp
+    let thumbnailBuffer;
+    try {
+      thumbnailBuffer = await sharp(fileBuffer)
+        .resize(parseInt(width), parseInt(height), {
+          fit: sharp.fit.cover,
+          position: sharp.strategy.entropy
+        })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+    } catch (sharpError) {
+      logger.error('Sharp thumbnail generation failed:', sharpError.message);
+      return res.status(500).json({ error: 'Thumbnail generation failed: ' + sharpError.message });
+    }
 
-    // Cache thumbnail for 1 hour
-    await redis.setEx(cacheKey, 3600, thumbnailBuffer.toString('base64'));
+    // Cache thumbnail for 1 hour (with error handling)
+    try {
+      await redis.setEx(cacheKey, 3600, thumbnailBuffer.toString('base64'));
+    } catch (redisError) {
+      logger.warn('Redis cache set failed for thumbnail:', redisError.message);
+    }
 
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400'); // 24 hours
     res.send(thumbnailBuffer);
 
   } catch (error) {
-    logger.error('Thumbnail generation failed:', error.message);
-    res.status(500).json({ error: 'Thumbnail generation failed' });
+    logger.error('Thumbnail generation failed:', { 
+      message: error.message, 
+      stack: error.stack,
+      mediaId: req.params.id
+    });
+    res.status(500).json({ error: 'Thumbnail generation failed: ' + error.message });
   }
 });
 

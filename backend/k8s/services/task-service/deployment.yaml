@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: task-service
-        image: gcr.io/circular-hash-459513-q5/task-service:latest
+        image: gcr.io/circular-hash-459513-q5/task-service:cors-fixed
         ports:
         - containerPort: 3002
           name: http
@@ -54,29 +54,25 @@ spec:
             configMapKeyRef:
               name: app-config
               key: auth-service-url
-        - name: REDIS_URL
+        - name: MEDIA_SERVICE_URL
           valueFrom:
             configMapKeyRef:
               name: app-config
-              key: redis-url
+              key: media-service-url
+        - name: REDIS_URL
+          value: "redis://redis.task-manager.svc.cluster.local:6379"
         - name: CORS_ORIGIN
           valueFrom:
             configMapKeyRef:
               name: app-config
               key: cors-origin
-        - name: GOOGLE_CLOUD_STORAGE_BUCKET
-          valueFrom:
-            configMapKeyRef:
-              name: app-config
-              key: storage-bucket
-              optional: true
         resources:
           requests:
-            memory: "128Mi"
-            cpu: "100m"
+            memory: "64Mi"
+            cpu: "10m"
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            memory: "128Mi"
+            cpu: "200m"
         livenessProbe:
           httpGet:
             path: /health
@@ -93,14 +89,6 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 1001
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop:
-            - ALL
 
 ---
 apiVersion: v1
@@ -116,6 +104,5 @@ spec:
   ports:
   - port: 80
     targetPort: 3002
-    protocol: TCP
     name: http
   type: ClusterIP

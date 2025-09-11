@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: auth-service
-        image: gcr.io/circular-hash-459513-q5/auth-service:latest
+        image: gcr.io/circular-hash-459513-q5/auth-service:cors-fixed
         ports:
         - containerPort: 3001
           name: http
@@ -61,11 +61,11 @@ spec:
               key: cors-origin
         resources:
           requests:
-            memory: "128Mi"
-            cpu: "100m"
+            memory: "64Mi"
+            cpu: "25m"
           limits:
-            memory: "256Mi"
-            cpu: "500m"
+            memory: "128Mi"
+            cpu: "200m"
         livenessProbe:
           httpGet:
             path: /health
