@@ -1,8 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  generateBuildId: async () => {
+    // Force new build ID to bust cache
+    return `build-${Date.now()}`;
+  },
   env: {
-    API_BASE_URL: process.env.API_BASE_URL || 'http://localhost:3000',
+    API_BASE_URL: process.env.API_BASE_URL || '',
   },
   async rewrites() {
     return [
@@ -30,7 +34,7 @@ const nextConfig = {
     domains: ['storage.googleapis.com', 'localhost'],
     formats: ['image/webp', 'image/avif'],
   },
-  // Security headers
+  // Security headers with cache busting
   async headers() {
     return [
       {
@@ -47,6 +51,18 @@ const nextConfig = {
           {
             key: 'Referrer-Policy',
             value: 'strict-origin-when-cross-origin',
+          },
+          {
+            key: 'Cache-Control',
+            value: 'no-cache, no-store, must-revalidate',
+          },
+          {
+            key: 'Pragma',
+            value: 'no-cache',
+          },
+          {
+            key: 'Expires',
+            value: '0',
           },
         ],
       },

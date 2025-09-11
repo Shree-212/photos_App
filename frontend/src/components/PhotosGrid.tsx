@@ -18,6 +18,7 @@ export const PhotosGrid: React.FC<PhotosGridProps> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>('all');
+  const [viewMode, setViewMode] = useState<'daily' | 'monthly'>('daily');
 
   useEffect(() => {
     fetchAllPhotos();
@@ -49,30 +50,89 @@ export const PhotosGrid: React.FC<PhotosGridProps> = ({
     }
   };
 
-  // Group photos by date
+  // Group photos by date with better organization
   const groupPhotosByDate = (photos: MediaFile[]) => {
-    const grouped: Record<string, MediaFile[]> = {};
+    const grouped: Record<string, { photos: MediaFile[], displayDate: string, relativeDate: string }> = {};
     
     photos.forEach(photo => {
       const date = new Date(photo.createdAt);
+      const now = new Date();
+      const diffTime = Math.abs(now.getTime() - date.getTime());
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      // Create date key for grouping
       const dateKey = date.toISOString().split('T')[0]; // YYYY-MM-DD
+      
+      // Create display date
       const displayDate = date.toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'long',
         day: 'numeric'
       });
       
-      if (!grouped[dateKey]) {
-        grouped[dateKey] = [];
+      // Create relative date
+      let relativeDate = '';
+      if (diffDays === 0) {
+        relativeDate = 'Today';
+      } else if (diffDays === 1) {
+        relativeDate = 'Yesterday';
+      } else if (diffDays <= 7) {
+        relativeDate = `${diffDays} days ago`;
+      } else if (diffDays <= 30) {
+        const weeks = Math.floor(diffDays / 7);
+        relativeDate = `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+      } else if (diffDays <= 365) {
+        const months = Math.floor(diffDays / 30);
+        relativeDate = `${months} month${months > 1 ? 's' : ''} ago`;
+      } else {
+        const years = Math.floor(diffDays / 365);
+        relativeDate = `${years} year${years > 1 ? 's' : ''} ago`;
       }
-      grouped[dateKey].push(photo);
+      
+      if (!grouped[dateKey]) {
+        grouped[dateKey] = {
+          photos: [],
+          displayDate,
+          relativeDate
+        };
+      }
+      grouped[dateKey].photos.push(photo);
+    });
+    
+    return grouped;
+  };
+
+  // Group photos by month for collection view
+  const groupPhotosByMonth = (photos: MediaFile[]) => {
+    const grouped: Record<string, { photos: MediaFile[], displayDate: string, count: number }> = {};
+    
+    photos.forEach(photo => {
+      const date = new Date(photo.createdAt);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`; // YYYY-MM
+      
+      const displayDate = date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long'
+      });
+      
+      if (!grouped[monthKey]) {
+        grouped[monthKey] = {
+          photos: [],
+          displayDate,
+          count: 0
+        };
+      }
+      grouped[monthKey].photos.push(photo);
+      grouped[monthKey].count++;
     });
     
     return grouped;
   };
 
   const groupedPhotos = groupPhotosByDate(photos);
+  const groupedByMonth = groupPhotosByMonth(photos);
   const sortedDateKeys = Object.keys(groupedPhotos).sort((a, b) => b.localeCompare(a)); // Newest first
+  const sortedMonthKeys = Object.keys(groupedByMonth).sort((a, b) => b.localeCompare(a)); // Newest first
 
   if (loading) {
     return (
@@ -129,39 +189,68 @@ export const PhotosGrid: React.FC<PhotosGridProps> = ({
         </p>
       </div>
 
-      {/* Date Filter (Future enhancement) */}
-      <div className="mb-6">
-        <select
-          value={selectedDate}
-          onChange={(e) => setSelectedDate(e.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-        >
-          <option value="all">All dates</option>
-          {sortedDateKeys.slice(0, 20).map(dateKey => {
-            const date = new Date(dateKey);
-            const displayDate = date.toLocaleDateString('en-US', {
-              year: 'numeric',
-              month: 'long'
-            });
-            return (
-              <option key={dateKey} value={dateKey}>
-                {displayDate} ({groupedPhotos[dateKey].length})
-              </option>
-            );
-          })}
-        </select>
+      {/* Date Filter and View Mode */}
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex items-center space-x-4">
+          <select
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="all">All dates</option>
+            {viewMode === 'daily' ? (
+              sortedDateKeys.slice(0, 20).map(dateKey => {
+                const group = groupedPhotos[dateKey];
+                return (
+                  <option key={dateKey} value={dateKey}>
+                    {group.displayDate} ({group.photos.length})
+                  </option>
+                );
+              })
+            ) : (
+              sortedMonthKeys.slice(0, 12).map(monthKey => {
+                const group = groupedByMonth[monthKey];
+                return (
+                  <option key={monthKey} value={monthKey}>
+                    {group.displayDate} ({group.count})
+                  </option>
+                );
+              })
+            )}
+          </select>
+        </div>
+        
+        <div className="flex items-center space-x-2">
+          <span className="text-sm text-gray-600">View:</span>
+          <button
+            onClick={() => setViewMode('daily')}
+            className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+              viewMode === 'daily' 
+                ? 'bg-blue-500 text-white' 
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            Daily
+          </button>
+          <button
+            onClick={() => setViewMode('monthly')}
+            className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+              viewMode === 'monthly' 
+                ? 'bg-blue-500 text-white' 
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            Monthly
+          </button>
+        </div>
       </div>
 
       {/* Photos Grid */}
       <div className="space-y-8">
         {sortedDateKeys.map(dateKey => {
-          const photos = groupedPhotos[dateKey];
-          const date = new Date(dateKey);
-          const displayDate = date.toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-          });
+          const group = groupedPhotos[dateKey];
+          const photos = group.photos;
+          const displayDate = group.displayDate;
 
           // Skip this date if a specific date is selected and it doesn't match
           if (selectedDate !== 'all' && selectedDate !== dateKey) {
