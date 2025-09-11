@@ -258,6 +258,15 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                       height={64}
                       className="w-full h-full object-cover"
                     />
+                  ) : media.mimeType.startsWith('video/') ? (
+                    <div className="w-full h-full bg-gray-800 flex items-center justify-center relative">
+                      <div className="text-white text-center">
+                        <div className="w-6 h-6 mx-auto mb-1 flex items-center justify-center">
+                          🎬
+                        </div>
+                        <div className="text-xs opacity-75">Video</div>
+                      </div>
+                    </div>
                   ) : (
                     <div className="w-full h-full bg-gray-100 flex items-center justify-center">
                       <Paperclip className="h-6 w-6 text-gray-400" />

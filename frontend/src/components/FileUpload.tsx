@@ -29,8 +29,11 @@ interface FileUploadProps {
 export const FileUpload: React.FC<FileUploadProps> = ({
   onUploadSuccess,
   onUploadError,
-  maxFileSize = 10 * 1024 * 1024, // 10MB
-  acceptedFileTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+  maxFileSize = 500 * 1024 * 1024, // 500MB
+  acceptedFileTypes = [
+    'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff',
+    'video/mp4', 'video/avi', 'video/mov', 'video/wmv', 'video/flv', 'video/webm', 'video/mkv'
+  ],
   className = ''
 }) => {
   const [uploading, setUploading] = useState(false);
@@ -64,6 +67,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         headers: {
           'Content-Type': 'multipart/form-data'
         },
+        timeout: 600000, // 10 minutes for large files
         onUploadProgress: (progressEvent: any) => {
           if (progressEvent.total) {
             const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
@@ -93,7 +97,19 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const { getRootProps, getInputProps, isDragActive, isDragReject } = useDropzone({
     onDrop,
     accept: {
-      'image/*': acceptedFileTypes.map(type => type.split('/')[1])
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/png': ['.png'],
+      'image/gif': ['.gif'],
+      'image/webp': ['.webp'],
+      'image/bmp': ['.bmp'],
+      'image/tiff': ['.tiff', '.tif'],
+      'video/mp4': ['.mp4'],
+      'video/avi': ['.avi'],
+      'video/mov': ['.mov'],
+      'video/wmv': ['.wmv'],
+      'video/flv': ['.flv'],
+      'video/webm': ['.webm'],
+      'video/mkv': ['.mkv']
     },
     maxFiles: 1,
     maxSize: maxFileSize,
@@ -136,7 +152,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
               or <span className="text-blue-600 font-medium">browse files</span>
             </p>
             <p className="text-xs text-gray-400 mt-2">
-              Supports: JPEG, PNG, GIF, WebP (max {Math.round(maxFileSize / (1024 * 1024))}MB)
+              Supports: Images (JPEG, PNG, GIF, WebP, BMP, TIFF) & Videos (MP4, AVI, MOV, WMV, WebM, MKV) - Max {Math.round(maxFileSize / (1024 * 1024))}MB
             </p>
           </div>
         </div>
@@ -172,9 +188,15 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({
   const [imageError, setImageError] = useState(false);
   const [imageLoading, setImageLoading] = useState(true);
 
-  const imageUrl = media.thumbnailUrl || media.thumbnailPath 
-    ? (media.thumbnailUrl || `/api/media/${media.id}/thumbnail`)
-    : `/api/media/${media.id}/download`;
+  const isVideo = media.mimeType?.startsWith('video/');
+  const isImage = media.mimeType?.startsWith('image/');
+
+  // For videos, don't try to load thumbnail, for images use thumbnail if available
+  const imageUrl = isImage && media.thumbnailUrl 
+    ? media.thumbnailUrl
+    : isImage 
+    ? `/api/media/${media.id}/download`
+    : null;
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
@@ -190,9 +212,18 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({
         className="relative overflow-hidden rounded-lg border border-gray-200 bg-gray-50 cursor-pointer hover:border-gray-300 transition-colors"
         onClick={onClick}
       >
-        {/* Image */}
+        {/* Media display */}
         <div className="aspect-square relative">
-          {!imageError ? (
+          {isVideo ? (
+            // Video file - show video icon placeholder
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
+              <div className="text-center">
+                <div className="text-4xl mb-2">🎬</div>
+                <p className="text-xs text-gray-600">Video File</p>
+              </div>
+            </div>
+          ) : isImage && imageUrl && !imageError ? (
+            // Image file - show thumbnail
             <>
               <AuthenticatedImage
                 src={imageUrl}
@@ -212,8 +243,12 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({
               )}
             </>
           ) : (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <AlertCircle className="h-8 w-8 text-gray-400" />
+            // Error state or unknown file type
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
+              <div className="text-center">
+                <AlertCircle className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                <p className="text-xs text-gray-600">File Preview</p>
+              </div>
             </div>
           )}
         </div>

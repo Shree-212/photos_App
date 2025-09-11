@@ -39,7 +39,8 @@ export const AuthenticatedImage: React.FC<AuthenticatedImageProps> = ({
         
         // Fetch the image with authentication
         const response = await api.get(src, {
-          responseType: 'blob'
+          responseType: 'blob',
+          timeout: 60000 // 60 second timeout for images/thumbnails
         });
         
         // Create object URL from blob
@@ -50,8 +51,15 @@ export const AuthenticatedImage: React.FC<AuthenticatedImageProps> = ({
         if (onLoad) {
           onLoad();
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load authenticated image:', err);
+        
+        // Log more details for debugging
+        if (err.response) {
+          console.error('Response status:', err.response.status);
+          console.error('Response data:', err.response.data);
+        }
+        
         setError(true);
         if (onError) {
           onError();

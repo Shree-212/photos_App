@@ -237,8 +237,8 @@ const getTaskWithMedia = async (taskId, userId, token = null) => {
     mimeType: media.mime_type,
     fileSize: media.size_bytes,
     createdAt: media.created_at,
-    thumbnailUrl: `/media/${media.id}/thumbnail`,
-    downloadUrl: `/media/${media.id}/download`
+    thumbnailUrl: `/api/media/${media.id}/thumbnail`,
+    downloadUrl: `/api/media/${media.id}/download`
   }));
   
   return task;
@@ -416,8 +416,8 @@ app.get('/tasks', authenticate, async (req, res) => {
                    'originalName', m.original_name,
                    'mimeType', m.mime_type,
                    'fileSize', m.size_bytes,
-                   'thumbnailUrl', '/media/' || m.id || '/thumbnail',
-                   'downloadUrl', '/media/' || m.id || '/download'
+                   'thumbnailUrl', '/api/media/' || m.id || '/thumbnail',
+                   'downloadUrl', '/api/media/' || m.id || '/download'
                  ) ORDER BY tm.created_at
                ) FILTER (WHERE m.id IS NOT NULL),
                '[]'::json
@@ -804,8 +804,8 @@ app.get('/tasks/:id/media', authenticate, async (req, res) => {
       mimeType: media.mime_type,
       fileSize: media.size_bytes,
       createdAt: media.created_at,
-      thumbnailUrl: `/media/${media.id}/thumbnail`,
-      downloadUrl: `/media/${media.id}/download`
+      thumbnailUrl: `/api/media/${media.id}/thumbnail`,
+      downloadUrl: `/api/media/${media.id}/download`
     }));
     
     res.json({

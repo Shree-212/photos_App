@@ -15,10 +15,6 @@ const nextConfig = {
         destination: 'http://task-service.task-manager.svc.cluster.local:80/tasks/:path*',
       },
       {
-        source: '/api/media/:path*',
-        destination: 'http://media-service.task-manager.svc.cluster.local:80/media/:path*',
-      },
-      {
         source: '/api/health',
         destination: 'http://auth-service.task-manager.svc.cluster.local:80/health',
       },

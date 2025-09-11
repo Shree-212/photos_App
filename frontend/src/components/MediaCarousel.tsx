@@ -2,7 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import Image from 'next/image';
-import { ChevronLeft, ChevronRight, X, Download, Eye } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, Download, Eye, Play } from 'lucide-react';
 import api from '../lib/auth';
 import { AuthenticatedImage } from './AuthenticatedImage';
 
@@ -24,6 +24,120 @@ interface MediaCarouselProps {
   className?: string;
 }
 
+// Helper component for authenticated video
+const AuthenticatedVideo: React.FC<{
+  src: string;
+  className?: string;
+  controls?: boolean;
+  poster?: string;
+}> = ({ src, className, controls = true, poster }) => {
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  React.useEffect(() => {
+    const fetchVideo = async () => {
+      try {
+        setLoading(true);
+        setError(false);
+        
+        const response = await api.get(src, {
+          responseType: 'blob',
+          timeout: 30000 // 30 second timeout for videos
+        });
+        
+        const blob = response.data;
+        const objectUrl = URL.createObjectURL(blob);
+        setVideoUrl(objectUrl);
+      } catch (err) {
+        console.error('Failed to load authenticated video:', err);
+        setError(true);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (src) {
+      fetchVideo();
+    }
+
+    return () => {
+      if (videoUrl) {
+        URL.revokeObjectURL(videoUrl);
+      }
+    };
+  }, [src]);
+
+  if (loading) {
+    return (
+      <div className={`flex items-center justify-center bg-gray-100 ${className}`}>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-600"></div>
+      </div>
+    );
+  }
+
+  if (error || !videoUrl) {
+    return (
+      <div className={`flex items-center justify-center bg-gray-100 text-gray-400 ${className}`}>
+        <div className="text-center">
+          <Play className="h-8 w-8 mx-auto mb-2" />
+          <span className="text-sm">Failed to load video</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <video 
+      src={videoUrl} 
+      className={className}
+      controls={controls}
+      poster={poster}
+      preload="metadata"
+    >
+      Your browser does not support the video tag.
+    </video>
+  );
+};
+
+// Helper component for media preview in thumbnails
+const MediaPreview: React.FC<{
+  media: MediaFile;
+  className?: string;
+  width?: number;
+  height?: number;
+}> = ({ media, className, width = 64, height = 64 }) => {
+  const isVideo = media.mimeType.startsWith('video/');
+  
+  if (isVideo) {
+    return (
+      <div className={`relative ${className}`}>
+        <div className="w-full h-full bg-gray-800 flex items-center justify-center">
+          <Play className="h-4 w-4 text-white" />
+        </div>
+        <span className="absolute bottom-0 right-0 bg-black/70 text-white text-xs px-1 rounded-tl">
+          🎬
+        </span>
+      </div>
+    );
+  }
+
+  // For images, try thumbnail first, fall back to full image
+  const imageUrl = media.thumbnailUrl 
+    ? media.thumbnailUrl 
+    : `/api/media/${media.id}/download`;
+
+  return (
+    <AuthenticatedImage
+      src={imageUrl}
+      alt={media.originalName}
+      width={width}
+      height={height}
+      className={className}
+    />
+  );
+};
+
 export const MediaCarousel: React.FC<MediaCarouselProps> = ({
   media,
   initialIndex = 0,
@@ -43,10 +157,8 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
   }
 
   const currentMedia = media[currentIndex];
-  const imageUrl = `/api/media/${currentMedia.id}/download`;
-  const thumbnailUrl = currentMedia.thumbnailUrl || currentMedia.thumbnailPath 
-    ? (currentMedia.thumbnailUrl || `/api/media/${currentMedia.id}/thumbnail`)
-    : imageUrl;
+  const isCurrentVideo = currentMedia.mimeType.startsWith('video/');
+  const mediaUrl = `/api/media/${currentMedia.id}/download`;
 
   const goToPrevious = () => {
     setCurrentIndex((prev) => (prev === 0 ? media.length - 1 : prev - 1));
@@ -111,7 +223,7 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
             <div>
               <h3 className="font-medium">{currentMedia.originalName}</h3>
               <p className="text-sm text-white/80">
-                {currentIndex + 1} of {media.length}
+                {currentIndex + 1} of {media.length} • {isCurrentVideo ? 'Video' : 'Image'}
               </p>
             </div>
             <div className="flex items-center space-x-2">
@@ -131,14 +243,22 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
           </div>
         </div>
 
-        {/* Fullscreen image */}
+        {/* Fullscreen media */}
         <div className="relative w-full h-full flex items-center justify-center">
-          <AuthenticatedImage
-            src={imageUrl}
-            alt={currentMedia.originalName}
-            fill
-            className="object-contain"
-          />
+          {isCurrentVideo ? (
+            <AuthenticatedVideo
+              src={mediaUrl}
+              className="max-w-full max-h-full"
+              controls
+            />
+          ) : (
+            <AuthenticatedImage
+              src={mediaUrl}
+              alt={currentMedia.originalName}
+              fill
+              className="object-contain"
+            />
+          )}
         </div>
 
         {/* Fullscreen navigation */}
@@ -170,12 +290,11 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
                   index === currentIndex ? 'border-white' : 'border-white/30'
                 }`}
               >
-                <AuthenticatedImage
-                  src={item.thumbnailUrl || item.thumbnailPath ? (item.thumbnailUrl || `/api/media/${item.id}/thumbnail`) : `/api/media/${item.id}/download`}
-                  alt={item.originalName}
+                <MediaPreview
+                  media={item}
+                  className="w-full h-full object-cover"
                   width={48}
                   height={48}
-                  className="w-full h-full object-cover"
                 />
               </button>
             ))}
@@ -192,7 +311,7 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
         <div>
           <h3 className="font-semibold text-gray-900">{currentMedia.originalName}</h3>
           <p className="text-sm text-gray-500">
-            {currentIndex + 1} of {media.length} • {formatFileSize(currentMedia.sizeBytes)}
+            {currentIndex + 1} of {media.length} • {formatFileSize(currentMedia.sizeBytes)} • {isCurrentVideo ? 'Video' : 'Image'}
           </p>
         </div>
         <div className="flex items-center space-x-2">
@@ -222,14 +341,22 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
         </div>
       </div>
 
-      {/* Main image */}
+      {/* Main media */}
       <div className="relative aspect-video bg-gray-100">
-        <AuthenticatedImage
-          src={imageUrl}
-          alt={currentMedia.originalName}
-          fill
-          className="object-contain"
-        />
+        {isCurrentVideo ? (
+          <AuthenticatedVideo
+            src={mediaUrl}
+            className="w-full h-full object-contain"
+            controls
+          />
+        ) : (
+          <AuthenticatedImage
+            src={mediaUrl}
+            alt={currentMedia.originalName}
+            fill
+            className="object-contain"
+          />
+        )}
         
         {/* Navigation arrows */}
         {media.length > 1 && (
@@ -271,12 +398,11 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
                     : 'border-gray-200 hover:border-gray-300'
                 }`}
               >
-                <AuthenticatedImage
-                  src={item.thumbnailUrl || item.thumbnailPath ? (item.thumbnailUrl || `/api/media/${item.id}/thumbnail`) : `/api/media/${item.id}/download`}
-                  alt={item.originalName}
+                <MediaPreview
+                  media={item}
+                  className="w-full h-full object-cover"
                   width={64}
                   height={64}
-                  className="w-full h-full object-cover"
                 />
               </button>
             ))}

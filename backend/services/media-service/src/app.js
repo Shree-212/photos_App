@@ -169,22 +169,32 @@ app.use(promMiddleware({
   collectGCMetrics: true,
 }));
 
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Body parsing middleware with increased limits for large files
+app.use(express.json({ limit: '600mb' }));
+app.use(express.urlencoded({ extended: true, limit: '600mb' }));
+
+// Increase request timeout for large file uploads
+app.use((req, res, next) => {
+  // Set timeout to 10 minutes for upload endpoints
+  if (req.path.includes('/upload')) {
+    req.setTimeout(600000); // 10 minutes
+    res.setTimeout(600000); // 10 minutes
+  }
+  next();
+});
 
 // Multer configuration for file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 500 * 1024 * 1024, // 500MB limit for large video files
   },
   fileFilter: (req, file, cb) => {
-    // Allow only image files
-    if (file.mimetype.startsWith('image/')) {
+    // Allow image and video files
+    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'), false);
+      cb(new Error('Only image and video files are allowed'), false);
     }
   }
 });
@@ -357,10 +367,12 @@ app.post('/media/upload', authenticateToken, upload.single('file'), async (req, 
       
       storageUrl = filePath;
     } else {
-      // Google Cloud Storage
+      // Google Cloud Storage - use streaming for better memory management
       const gcsPath = `media/${req.user.id}/${filename}`;
       const file = bucket.file(gcsPath);
-      const stream = file.createWriteStream({
+      
+      // Configure upload options
+      const uploadOptions = {
         metadata: {
           contentType: req.file.mimetype,
           metadata: {
@@ -368,12 +380,29 @@ app.post('/media/upload', authenticateToken, upload.single('file'), async (req, 
             uploadedBy: req.user.id.toString(),
             uploadedAt: new Date().toISOString()
           }
-        }
-      });
+        },
+        // Enable resumable uploads for large files
+        resumable: req.file.size > 10 * 1024 * 1024 // Use resumable for files > 10MB
+      };
+
+      const stream = file.createWriteStream(uploadOptions);
 
       await new Promise((resolve, reject) => {
-        stream.on('error', reject);
-        stream.on('finish', resolve);
+        stream.on('error', (error) => {
+          logger.error('GCS upload stream error:', error);
+          reject(error);
+        });
+        
+        stream.on('finish', () => {
+          logger.info('GCS upload completed successfully', { 
+            filename, 
+            size: fileBuffer.length,
+            gcsPath 
+          });
+          resolve(null);
+        });
+        
+        // Write the buffer to the stream
         stream.end(fileBuffer);
       });
       
@@ -422,19 +451,26 @@ app.post('/media/upload', authenticateToken, upload.single('file'), async (req, 
       duration: Date.now() - startTime
     });
 
+    // Prepare response object
+    const responseMedia = {
+      id: mediaFile.id,
+      filename: mediaFile.filename,
+      originalName: mediaFile.original_name,
+      mimeType: mediaFile.mime_type,
+      sizeBytes: mediaFile.size_bytes,
+      isPublic: mediaFile.is_public,
+      createdAt: mediaFile.created_at,
+      downloadUrl: `/api/media/${mediaFile.id}/download`
+    };
+
+    // Only include thumbnail URL for images
+    if (mediaFile.mime_type.startsWith('image/')) {
+      responseMedia.thumbnailUrl = `/api/media/${mediaFile.id}/thumbnail`;
+    }
+
     res.status(201).json({
       message: 'File uploaded successfully',
-      media: {
-        id: mediaFile.id,
-        filename: mediaFile.filename,
-        originalName: mediaFile.original_name,
-        mimeType: mediaFile.mime_type,
-        sizeBytes: mediaFile.size_bytes,
-        isPublic: mediaFile.is_public,
-        createdAt: mediaFile.created_at,
-        downloadUrl: `/api/media/${mediaFile.id}/download`,
-        thumbnailUrl: `/api/media/${mediaFile.id}/thumbnail`
-      }
+      media: responseMedia
     });
 
   } catch (error) {
@@ -463,19 +499,26 @@ app.get('/media/:id', authenticateToken, async (req, res) => {
 
     const mediaFile = result.rows[0];
     
+    // Prepare response object
+    const responseMedia = {
+      id: mediaFile.id,
+      filename: mediaFile.filename,
+      originalName: mediaFile.original_name,
+      mimeType: mediaFile.mime_type,
+      sizeBytes: mediaFile.size_bytes,
+      isPublic: mediaFile.is_public,
+      metadata: mediaFile.metadata,
+      createdAt: mediaFile.created_at,
+      downloadUrl: `/api/media/${mediaFile.id}/download`
+    };
+
+    // Only include thumbnail URL for images
+    if (mediaFile.mime_type.startsWith('image/')) {
+      responseMedia.thumbnailUrl = `/api/media/${mediaFile.id}/thumbnail`;
+    }
+    
     res.json({
-      media: {
-        id: mediaFile.id,
-        filename: mediaFile.filename,
-        originalName: mediaFile.original_name,
-        mimeType: mediaFile.mime_type,
-        sizeBytes: mediaFile.size_bytes,
-        isPublic: mediaFile.is_public,
-        metadata: mediaFile.metadata,
-        createdAt: mediaFile.created_at,
-        downloadUrl: `/api/media/${mediaFile.id}/download`,
-        thumbnailUrl: `/api/media/${mediaFile.id}/thumbnail`
-      }
+      media: responseMedia
     });
 
   } catch (error) {
@@ -566,9 +609,11 @@ app.get('/media/:id/thumbnail', authenticateToken, async (req, res) => {
 
     const mediaFile = result.rows[0];
     
-    // Only generate thumbnails for images
+    // For non-image files, return a default placeholder or error
     if (!mediaFile.mime_type.startsWith('image/')) {
-      return res.status(400).json({ error: 'Thumbnails only available for images' });
+      // Return 404 for non-image thumbnails instead of 400
+      // This allows the frontend to handle it as "missing" rather than "bad request"
+      return res.status(404).json({ error: 'Thumbnail not available for this file type' });
     }
 
     const cacheKey = `thumbnail:${mediaFile.id}:${width}x${height}`;
@@ -763,17 +808,25 @@ app.delete('/media/:id', authenticateToken, async (req, res) => {
     // Update storage metrics
     storageGauge.dec(mediaFile.size_bytes);
 
-    // Publish event
-    await publishEvent('media.deleted', {
-      mediaId: mediaFile.id,
-      userId: req.user.id,
-      filename: mediaFile.filename
-    });
+    // Publish event (handle errors separately to not affect response)
+    try {
+      await publishEvent('media.deleted', {
+        mediaId: mediaFile.id,
+        userId: req.user.id,
+        filename: mediaFile.filename
+      });
+    } catch (eventError) {
+      logger.warn('Failed to publish delete event:', eventError.message);
+    }
 
-    // Clear thumbnail cache
-    const thumbnailKeys = await redis.keys(`thumbnail:${mediaFile.id}:*`);
-    if (thumbnailKeys.length > 0) {
-      await redis.del(...thumbnailKeys);
+    // Clear thumbnail cache (handle errors separately to not affect response)
+    try {
+      const thumbnailKeys = await redis.keys(`thumbnail:${mediaFile.id}:*`);
+      if (thumbnailKeys.length > 0) {
+        await redis.del(...thumbnailKeys);
+      }
+    } catch (cacheError) {
+      logger.warn('Failed to clear thumbnail cache:', cacheError.message);
     }
 
     logger.info('Media file deleted successfully', {
