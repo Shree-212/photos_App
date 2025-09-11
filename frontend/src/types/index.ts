@@ -18,44 +18,36 @@ export interface MediaFile {
   createdAt: string;
 }
 
-export interface Task {
+export interface Album {
   id: number;
   title: string;
   description?: string;
-  status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
-  priority: 'low' | 'medium' | 'high';
-  dueDate?: string;
+  tags: ('childhood' | 'love' | 'family' | 'friends' | 'travel' | 'nature' | 'food' | 'celebration' | 'work' | 'pets' | 'hobbies' | 'sports' | 'art' | 'music')[];
+  category: 'nostalgia' | 'emotions' | 'happiness' | 'pride' | 'dreams' | 'vibe' | 'inspiration' | 'memories';
   userId: number;
   createdAt: string;
   updatedAt: string;
-  assignedTo?: {
-    id: number;
-    name: string;
-    avatar?: string;
-  };
   media?: MediaFile[];
 }
 
-export interface CreateTaskData {
+export interface CreateAlbumData {
   title: string;
   description?: string;
-  priority?: 'low' | 'medium' | 'high';
-  status?: 'pending' | 'in-progress' | 'completed' | 'cancelled';
-  dueDate?: string;
+  tags?: ('childhood' | 'love' | 'family' | 'friends' | 'travel' | 'nature' | 'food' | 'celebration' | 'work' | 'pets' | 'hobbies' | 'sports' | 'art' | 'music')[];
+  category?: 'nostalgia' | 'emotions' | 'happiness' | 'pride' | 'dreams' | 'vibe' | 'inspiration' | 'memories';
   mediaIds?: number[];
 }
 
-export interface UpdateTaskData {
+export interface UpdateAlbumData {
   title?: string;
   description?: string;
-  priority?: 'low' | 'medium' | 'high';
-  status?: 'pending' | 'in-progress' | 'completed' | 'cancelled';
-  dueDate?: string;
+  tags?: ('childhood' | 'love' | 'family' | 'friends' | 'travel' | 'nature' | 'food' | 'celebration' | 'work' | 'pets' | 'hobbies' | 'sports' | 'art' | 'music')[];
+  category?: 'nostalgia' | 'emotions' | 'happiness' | 'pride' | 'dreams' | 'vibe' | 'inspiration' | 'memories';
   mediaIds?: number[];
 }
 
-export interface TasksResponse {
-  tasks: Task[];
+export interface AlbumsResponse {
+  albums: Album[];
   pagination: {
     page: number;
     limit: number;
@@ -66,15 +58,22 @@ export interface TasksResponse {
   };
 }
 
-export interface TaskStats {
+export interface AlbumStats {
   total: number;
-  pending: number;
-  in_progress: number;
-  completed: number;
-  cancelled: number;
-  high_priority: number;
-  overdue: number;
+  childhood: number;
+  love: number;
+  family: number;
+  nostalgia: number;
+  happiness: number;
+  inspiration: number;
 }
+
+// Backward compatibility - Task is now just an alias for Album
+export type Task = Album;
+export type CreateTaskData = CreateAlbumData;
+export type UpdateTaskData = UpdateAlbumData;
+export type TasksResponse = AlbumsResponse;
+export type TaskStats = AlbumStats;
 
 export interface AuthResponse {
   message: string;

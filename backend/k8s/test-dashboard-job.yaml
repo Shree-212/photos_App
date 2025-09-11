@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-dashboard-functionality
+  namespace: task-manager
+spec:
+  template:
+    spec:
+      containers:
+      - name: curl-test
+        image: curlimages/curl
+        command: ["sh", "-c"]
+        args: 
+        - |
+          echo "Testing login and albums access..."
+          
+          # Test login endpoint
+          echo "Testing login..."
+          LOGIN_RESPONSE=$(curl -s -X POST http://auth-service.task-manager.svc.cluster.local:80/login \
+            -H "Content-Type: application/json" \
+            -d '{"email": "admin@example.com", "password": "password123"}')
+          echo "Login response: $LOGIN_RESPONSE"
+          
+          # Extract token (assuming JSON response)
+          TOKEN=$(echo $LOGIN_RESPONSE | grep -o '"token":"[^"]*"' | cut -d'"' -f4 || echo "")
+          echo "Extracted token: $TOKEN"
+          
+          if [ -n "$TOKEN" ]; then
+            echo "Testing albums endpoint with token..."
+            ALBUMS_RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" \
+              http://task-service.task-manager.svc.cluster.local:80/albums)
+            echo "Albums response: $ALBUMS_RESPONSE"
+          else
+            echo "No token received, testing albums without auth..."
+            curl -s http://task-service.task-manager.svc.cluster.local:80/albums
+          fi
+      restartPolicy: Never
+  backoffLimit: 3

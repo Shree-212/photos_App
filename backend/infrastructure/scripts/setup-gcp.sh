@@ -39,10 +39,10 @@ check_prerequisites() {
 get_project_config() {
     print_status "Setting up project configuration..."
     
-    # Generate unique project ID if not provided
+    # Use the existing project ID
     if [ -z "$PROJECT_ID" ]; then
-        PROJECT_ID="task-manager-$(date +%s)"
-        print_status "Generated project ID: $PROJECT_ID"
+        PROJECT_ID="circular-hash-459513-q5"
+        print_status "Using existing project ID: $PROJECT_ID"
     fi
     
     # Set default region and zone

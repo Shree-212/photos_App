@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: app-config
-  namespace: task-manager
+  namespace: photo-albums
 data:
   # Database Configuration  
   db-host: "34.122.121.162"  # Public Cloud SQL IP

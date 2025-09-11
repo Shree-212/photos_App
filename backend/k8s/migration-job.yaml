@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migration-job
+  namespace: task-manager
+spec:
+  template:
+    spec:
+      containers:
+      - name: migration
+        image: postgres:13
+        env:
+        - name: PGPASSWORD
+          value: "Shree@2025"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          psql -h 34.122.121.162 -U taskuser -d taskmanager_db -f /migration/create_albums_table.sql
+        volumeMounts:
+        - name: migration-sql
+          mountPath: /migration
+      volumes:
+      - name: migration-sql
+        configMap:
+          name: migration-sql
+      restartPolicy: Never
+  backoffLimit: 4

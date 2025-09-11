@@ -135,7 +135,7 @@ spec:
               key: password
         - name: AUTH_SERVICE_URL
           value: "http://auth-service:80"
-        - name: GCP_PROJECT_ID
+        - name: GCP_circular-hash-459513-q5
           value: "circular-hash-459513-q5"
         - name: PUBSUB_TOPIC
           value: "task-manager-events"

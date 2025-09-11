@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  namespace: task-manager
+  namespace: photo-albums
   labels:
     app: frontend
     version: v1
@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: gcr.io/PROJECT_ID/frontend:latest
+        image: gcr.io/circular-hash-459513-q5/frontend:latest
         ports:
         - containerPort: 3000
           name: http
@@ -65,7 +65,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: frontend
-  namespace: task-manager
+  namespace: photo-albums
   labels:
     app: frontend
 spec:
@@ -83,7 +83,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: frontend-ingress
-  namespace: task-manager
+  namespace: photo-albums
   annotations:
     kubernetes.io/ingress.class: "gce"
     kubernetes.io/ingress.global-static-ip-name: "frontend-ip"
@@ -107,7 +107,7 @@ apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
 metadata:
   name: frontend-ssl-cert
-  namespace: task-manager
+  namespace: photo-albums
 spec:
   domains:
     - your-domain.com
@@ -117,7 +117,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: frontend-hpa
-  namespace: task-manager
+  namespace: photo-albums
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

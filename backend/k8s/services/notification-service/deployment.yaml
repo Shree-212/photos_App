@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: notification-service
-  namespace: task-manager
+  namespace: photo-albums
   labels:
     app: notification-service
     version: v1
@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: notification-service
-        image: gcr.io/PROJECT_ID/notification-service:latest
+        image: gcr.io/circular-hash-459513-q5/notification-service:latest
         ports:
         - containerPort: 3004
           name: http
@@ -138,7 +138,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: notification-service
-  namespace: task-manager
+  namespace: photo-albums
   labels:
     app: notification-service
 spec:

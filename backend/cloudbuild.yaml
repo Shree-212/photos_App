@@ -5,19 +5,19 @@ steps:
     args:
     - 'build'
     - '-t'
-    - 'gcr.io/$PROJECT_ID/auth-service:$BUILD_ID'
+    - 'gcr.io/circular-hash-459513-q5/auth-service:$BUILD_ID'
     - '-t'
-    - 'gcr.io/$PROJECT_ID/auth-service:latest'
+    - 'gcr.io/circular-hash-459513-q5/auth-service:latest'
     - './services/auth-service'
     
   - name: 'gcr.io/cloud-builders/docker'
-    id: 'build-task-service'
+    id: 'build-album-service'
     args:
     - 'build'
     - '-t'
-    - 'gcr.io/$PROJECT_ID/task-service:$BUILD_ID'
+    - 'gcr.io/circular-hash-459513-q5/album-service:$BUILD_ID'
     - '-t'
-    - 'gcr.io/$PROJECT_ID/task-service:latest'
+    - 'gcr.io/circular-hash-459513-q5/album-service:latest'
     - './services/task-service'
 
   - name: 'gcr.io/cloud-builders/docker'
@@ -25,9 +25,9 @@ steps:
     args:
     - 'build'
     - '-t'
-    - 'gcr.io/$PROJECT_ID/media-service:$BUILD_ID'
+    - 'gcr.io/circular-hash-459513-q5/media-service:$BUILD_ID'
     - '-t'
-    - 'gcr.io/$PROJECT_ID/media-service:latest'
+    - 'gcr.io/circular-hash-459513-q5/media-service:latest'
     - './services/media-service'
 
   - name: 'gcr.io/cloud-builders/docker'
@@ -35,9 +35,9 @@ steps:
     args:
     - 'build'
     - '-t'
-    - 'gcr.io/$PROJECT_ID/notification-service:$BUILD_ID'
+    - 'gcr.io/circular-hash-459513-q5/notification-service:$BUILD_ID'
     - '-t'
-    - 'gcr.io/$PROJECT_ID/notification-service:latest'
+    - 'gcr.io/circular-hash-459513-q5/notification-service:latest'
     - './services/notification-service'
     
   - name: 'gcr.io/cloud-builders/docker'
@@ -45,9 +45,9 @@ steps:
     args:
     - 'build'
     - '-t'
-    - 'gcr.io/$PROJECT_ID/api-gateway:$BUILD_ID'
+    - 'gcr.io/circular-hash-459513-q5/api-gateway:$BUILD_ID'
     - '-t'
-    - 'gcr.io/$PROJECT_ID/api-gateway:latest'
+    - 'gcr.io/circular-hash-459513-q5/api-gateway:latest'
     - './services/api-gateway'
 
   # Push images to Container Registry
@@ -55,70 +55,70 @@ steps:
     id: 'push-auth-service'
     args:
     - 'push'
-    - 'gcr.io/$PROJECT_ID/auth-service:$BUILD_ID'
+    - 'gcr.io/circular-hash-459513-q5/auth-service:$BUILD_ID'
     waitFor: ['build-auth-service']
     
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push-auth-service-latest'
     args:
     - 'push'
-    - 'gcr.io/$PROJECT_ID/auth-service:latest'
+    - 'gcr.io/circular-hash-459513-q5/auth-service:latest'
     waitFor: ['build-auth-service']
     
   - name: 'gcr.io/cloud-builders/docker'
-    id: 'push-task-service'
+    id: 'push-album-service'
     args:
     - 'push'
-    - 'gcr.io/$PROJECT_ID/task-service:$BUILD_ID'
-    waitFor: ['build-task-service']
+    - 'gcr.io/circular-hash-459513-q5/album-service:$BUILD_ID'
+    waitFor: ['build-album-service']
     
   - name: 'gcr.io/cloud-builders/docker'
-    id: 'push-task-service-latest'
+    id: 'push-album-service-latest'
     args:
     - 'push'
-    - 'gcr.io/$PROJECT_ID/task-service:latest'
-    waitFor: ['build-task-service']
+    - 'gcr.io/circular-hash-459513-q5/album-service:latest'
+    waitFor: ['build-album-service']
 
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push-media-service'
     args:
     - 'push'
-    - 'gcr.io/$PROJECT_ID/media-service:$BUILD_ID'
+    - 'gcr.io/circular-hash-459513-q5/media-service:$BUILD_ID'
     waitFor: ['build-media-service']
     
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push-media-service-latest'
     args:
     - 'push'
-    - 'gcr.io/$PROJECT_ID/media-service:latest'
+    - 'gcr.io/circular-hash-459513-q5/media-service:latest'
     waitFor: ['build-media-service']
 
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push-notification-service'
     args:
     - 'push'
-    - 'gcr.io/$PROJECT_ID/notification-service:$BUILD_ID'
+    - 'gcr.io/circular-hash-459513-q5/notification-service:$BUILD_ID'
     waitFor: ['build-notification-service']
     
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push-notification-service-latest'
     args:
     - 'push'
-    - 'gcr.io/$PROJECT_ID/notification-service:latest'
+    - 'gcr.io/circular-hash-459513-q5/notification-service:latest'
     waitFor: ['build-notification-service']
     
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push-api-gateway'
     args:
     - 'push'
-    - 'gcr.io/$PROJECT_ID/api-gateway:$BUILD_ID'
+    - 'gcr.io/circular-hash-459513-q5/api-gateway:$BUILD_ID'
     waitFor: ['build-api-gateway']
     
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push-api-gateway-latest'
     args:
     - 'push'
-    - 'gcr.io/$PROJECT_ID/api-gateway:latest'
+    - 'gcr.io/circular-hash-459513-q5/api-gateway:latest'
     waitFor: ['build-api-gateway']
 
   # Deploy to GKE
@@ -127,12 +127,12 @@ steps:
     args:
     - run
     - --filename=k8s/
-    - --cluster=task-manager-cluster
+    - --cluster=photo-albums-cluster
     - --location=us-central1-a
-    - --namespace=task-manager
+    - --namespace=photo-albums
     waitFor: 
     - 'push-auth-service-latest'
-    - 'push-task-service-latest'
+    - 'push-album-service-latest'
     - 'push-media-service-latest'
     - 'push-notification-service-latest'
     - 'push-api-gateway-latest'
@@ -146,13 +146,13 @@ options:
 # Substitutions
 substitutions:
   _CLUSTER_LOCATION: us-central1-a
-  _CLUSTER_NAME: task-manager-cluster
+  _CLUSTER_NAME: photo-albums-cluster
 
 # Timeout
 timeout: 1200s
 
 # Tags for build identification
 tags:
-- 'task-manager'
+- 'photo-albums'
 - 'microservices'
 - 'gke-deployment'

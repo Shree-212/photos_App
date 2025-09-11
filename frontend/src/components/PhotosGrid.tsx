@@ -1,0 +1,225 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { MediaFile } from '../types';
+import { AuthenticatedImage } from './AuthenticatedImage';
+import api from '../lib/auth';
+
+interface PhotosGridProps {
+  className?: string;
+  onPhotoClick?: (photo: MediaFile, allPhotos: MediaFile[]) => void;
+}
+
+export const PhotosGrid: React.FC<PhotosGridProps> = ({
+  className = '',
+  onPhotoClick
+}) => {
+  const [photos, setPhotos] = useState<MediaFile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>('all');
+
+  useEffect(() => {
+    fetchAllPhotos();
+  }, []);
+
+  const fetchAllPhotos = async () => {
+    try {
+      setLoading(true);
+      const response = await api.get('/api/media', {
+        params: {
+          type: 'image',
+          sort: 'created_at',
+          order: 'desc',
+          limit: 1000 // Get lots of photos for the grid
+        }
+      });
+      
+      // Only include images, filter out videos and other media types
+      const imageFiles = response.data.media?.filter((file: MediaFile) => 
+        file.mimeType.startsWith('image/')
+      ) || [];
+      
+      setPhotos(imageFiles);
+    } catch (err) {
+      console.error('Failed to fetch photos:', err);
+      setError('Failed to load photos');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Group photos by date
+  const groupPhotosByDate = (photos: MediaFile[]) => {
+    const grouped: Record<string, MediaFile[]> = {};
+    
+    photos.forEach(photo => {
+      const date = new Date(photo.createdAt);
+      const dateKey = date.toISOString().split('T')[0]; // YYYY-MM-DD
+      const displayDate = date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+      
+      if (!grouped[dateKey]) {
+        grouped[dateKey] = [];
+      }
+      grouped[dateKey].push(photo);
+    });
+    
+    return grouped;
+  };
+
+  const groupedPhotos = groupPhotosByDate(photos);
+  const sortedDateKeys = Object.keys(groupedPhotos).sort((a, b) => b.localeCompare(a)); // Newest first
+
+  if (loading) {
+    return (
+      <div className={`${className} flex items-center justify-center py-12`}>
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <p className="text-gray-500">Loading your photos...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className={`${className} flex items-center justify-center py-12`}>
+        <div className="text-center">
+          <p className="text-red-500 mb-4">{error}</p>
+          <button
+            onClick={fetchAllPhotos}
+            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (photos.length === 0) {
+    return (
+      <div className={`${className} flex items-center justify-center py-12`}>
+        <div className="text-center">
+          <div className="text-6xl mb-4">📸</div>
+          <h3 className="text-xl font-semibold text-gray-700 mb-2">No photos yet</h3>
+          <p className="text-gray-500 mb-4">Upload some photos to see them here in a beautiful grid layout</p>
+          <button
+            onClick={() => window.location.href = '/dashboard?tab=albums'}
+            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+          >
+            Create Your First Album
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={className}>
+      {/* Header */}
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Your Photos</h2>
+        <p className="text-gray-600">
+          {photos.length} photo{photos.length !== 1 ? 's' : ''} • Organized by date
+        </p>
+      </div>
+
+      {/* Date Filter (Future enhancement) */}
+      <div className="mb-6">
+        <select
+          value={selectedDate}
+          onChange={(e) => setSelectedDate(e.target.value)}
+          className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="all">All dates</option>
+          {sortedDateKeys.slice(0, 20).map(dateKey => {
+            const date = new Date(dateKey);
+            const displayDate = date.toLocaleDateString('en-US', {
+              year: 'numeric',
+              month: 'long'
+            });
+            return (
+              <option key={dateKey} value={dateKey}>
+                {displayDate} ({groupedPhotos[dateKey].length})
+              </option>
+            );
+          })}
+        </select>
+      </div>
+
+      {/* Photos Grid */}
+      <div className="space-y-8">
+        {sortedDateKeys.map(dateKey => {
+          const photos = groupedPhotos[dateKey];
+          const date = new Date(dateKey);
+          const displayDate = date.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+          });
+
+          // Skip this date if a specific date is selected and it doesn't match
+          if (selectedDate !== 'all' && selectedDate !== dateKey) {
+            return null;
+          }
+
+          return (
+            <div key={dateKey} className="space-y-4">
+              {/* Date Header */}
+              <div className="sticky top-0 bg-white bg-opacity-90 backdrop-blur-sm py-2 z-10">
+                <h3 className="text-lg font-semibold text-gray-800">{displayDate}</h3>
+                <p className="text-sm text-gray-500">{photos.length} photo{photos.length !== 1 ? 's' : ''}</p>
+              </div>
+
+              {/* Google Photos style responsive grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-1">
+                {photos.map((photo, index) => (
+                  <div
+                    key={photo.id}
+                    className="aspect-square cursor-pointer group relative overflow-hidden rounded-sm"
+                    onClick={() => onPhotoClick?.(photo, photos)}
+                  >
+                    <AuthenticatedImage
+                      src={photo.thumbnailUrl || `/api/media/${photo.id}/thumbnail`}
+                      alt={photo.originalName}
+                      className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                    />
+                    
+                    {/* Hover overlay with photo info */}
+                    <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-200 flex items-end">
+                      <div className="p-2 text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                        <p className="text-xs font-medium truncate">{photo.originalName}</p>
+                        <p className="text-xs opacity-75">
+                          {(photo.sizeBytes / 1024 / 1024).toFixed(1)} MB
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Selection indicator (for future multi-select) */}
+                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="w-6 h-6 border-2 border-white rounded-full bg-black bg-opacity-30"></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Load more button (future enhancement) */}
+      {photos.length > 0 && (
+        <div className="text-center py-8">
+          <p className="text-gray-500">
+            Showing all {photos.length} photos
+          </p>
+        </div>
+      )}
+    </div>
+  );
+};

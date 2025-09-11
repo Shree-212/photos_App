@@ -22,16 +22,16 @@ const register = new promClient.Registry();
 promClient.collectDefaultMetrics({ register });
 
 // Custom metrics
-const taskCounter = new promClient.Counter({
-  name: 'tasks_total',
-  help: 'Total number of tasks',
+const albumCounter = new promClient.Counter({
+  name: 'albums_total',
+  help: 'Total number of albums',
   labelNames: ['operation', 'status'],
   registers: [register]
 });
 
-const taskDuration = new promClient.Histogram({
-  name: 'task_operation_duration_seconds',
-  help: 'Duration of task operations',
+const albumDuration = new promClient.Histogram({
+  name: 'album_operation_duration_seconds',
+  help: 'Duration of album operations',
   labelNames: ['operation'],
   registers: [register]
 });
@@ -50,7 +50,7 @@ const logger = winston.createLogger({
     winston.format.errors({ stack: true }),
     winston.format.json()
   ),
-  defaultMeta: { service: 'task-service' },
+  defaultMeta: { service: 'album-service' },
   transports: [
     new winston.transports.File({ filename: 'error.log', level: 'error' }),
     new winston.transports.File({ filename: 'combined.log' }),
@@ -97,7 +97,7 @@ pool.connect((err, client, release) => {
 });
 
 // Initialize tracing
-const tracingManager = new SimpleTracingManager('task-service', logger);
+const tracingManager = new SimpleTracingManager('album-service', logger);
 
 // Middleware
 app.use(helmet());
@@ -141,21 +141,19 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // Validation schemas
-const taskSchema = Joi.object({
+const albumSchema = Joi.object({
   title: Joi.string().min(1).max(255).required(),
   description: Joi.string().max(2000).allow(''),
-  priority: Joi.string().valid('low', 'medium', 'high').default('medium'),
-  status: Joi.string().valid('pending', 'in-progress', 'completed', 'cancelled').default('pending'),
-  dueDate: Joi.date().iso().allow(null),
+  tags: Joi.array().items(Joi.string().valid('childhood', 'love', 'family', 'friends', 'travel', 'nature', 'food', 'celebration', 'work', 'pets', 'hobbies', 'sports', 'art', 'music')).default([]),
+  category: Joi.string().valid('nostalgia', 'emotions', 'happiness', 'pride', 'dreams', 'vibe', 'inspiration', 'memories').default('memories'),
   mediaIds: Joi.array().items(Joi.number().integer().positive()).default([])
 });
 
-const updateTaskSchema = Joi.object({
+const updateAlbumSchema = Joi.object({
   title: Joi.string().min(1).max(255),
   description: Joi.string().max(2000).allow(''),
-  priority: Joi.string().valid('low', 'medium', 'high'),
-  status: Joi.string().valid('pending', 'in-progress', 'completed', 'cancelled'),
-  dueDate: Joi.date().iso().allow(null),
+  tags: Joi.array().items(Joi.string().valid('childhood', 'love', 'family', 'friends', 'travel', 'nature', 'food', 'celebration', 'work', 'pets', 'hobbies', 'sports', 'art', 'music')),
+  category: Joi.string().valid('nostalgia', 'emotions', 'happiness', 'pride', 'dreams', 'vibe', 'inspiration', 'memories'),
   mediaIds: Joi.array().items(Joi.number().integer().positive()).default([])
 }).min(1);
 
@@ -171,7 +169,7 @@ const publishEvent = async (eventType, data, correlationId = null) => {
     const event = {
       eventType,
       timestamp: new Date().toISOString(),
-      serviceId: 'task-service',
+      serviceId: 'album-service',
       correlationId: correlationId || uuidv4(),
       data
     };
@@ -208,29 +206,29 @@ const getMediaFiles = async (mediaIds, userId, token) => {
   }
 };
 
-// Get task with media
-const getTaskWithMedia = async (taskId, userId, token = null) => {
-  const taskResult = await pool.query(
-    'SELECT * FROM tasks WHERE id = $1 AND user_id = $2',
-    [taskId, userId]
+// Get album with media
+const getAlbumWithMedia = async (albumId, userId, token = null) => {
+  const albumResult = await pool.query(
+    'SELECT * FROM albums WHERE id = $1 AND user_id = $2',
+    [albumId, userId]
   );
   
-  if (taskResult.rows.length === 0) {
+  if (albumResult.rows.length === 0) {
     return null;
   }
   
-  const task = taskResult.rows[0];
+  const album = albumResult.rows[0];
   
   // Get associated media
   const mediaResult = await pool.query(`
     SELECT m.*
     FROM media m
-    JOIN task_media tm ON m.id = tm.media_id
-    WHERE tm.task_id = $1
-    ORDER BY tm.created_at
-  `, [taskId]);
+    JOIN album_media am ON m.id = am.media_id
+    WHERE am.album_id = $1
+    ORDER BY am.created_at
+  `, [albumId]);
   
-  task.media = mediaResult.rows.map(media => ({
+  album.media = mediaResult.rows.map(media => ({
     id: media.id,
     filename: media.filename,
     originalName: media.original_name,
@@ -241,7 +239,7 @@ const getTaskWithMedia = async (taskId, userId, token = null) => {
     downloadUrl: `/api/media/${media.id}/download`
   }));
   
-  return task;
+  return album;
 };
 const verifyTokenWithAuthService = async (token) => {
   const authServiceUrl = process.env.AUTH_SERVICE_URL || 'http://auth-service:3001';
@@ -281,7 +279,7 @@ const verifyTokenWithAuthService = async (token) => {
   }
 };
 
-const getCachedTasks = async (cacheKey) => {
+const getCachedAlbums = async (cacheKey) => {
   try {
     const cached = await redis.get(cacheKey);
     return cached ? JSON.parse(cached) : null;
@@ -291,7 +289,7 @@ const getCachedTasks = async (cacheKey) => {
   }
 };
 
-const setCachedTasks = async (cacheKey, data, expireInSeconds = 300) => {
+const setCachedAlbums = async (cacheKey, data, expireInSeconds = 300) => {
   try {
     await redis.setEx(cacheKey, expireInSeconds, JSON.stringify(data));
   } catch (error) {
@@ -336,7 +334,7 @@ app.get('/health', (req, res) => {
   logger.info(`GET /health`, { ip: req.ip, userAgent: req.get('User-Agent') });
   res.json({ 
     status: 'healthy', 
-    service: 'task-service',
+    service: 'album-service',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
@@ -387,27 +385,27 @@ app.get('/ready', async (req, res) => {
   }
 });
 
-// Get all tasks for the authenticated user
-app.get('/tasks', authenticate, async (req, res) => {
-  const timer = taskDuration.startTimer({ operation: 'get_tasks' });
+// Get all albums for the authenticated user
+app.get('/albums', authenticate, async (req, res) => {
+  const timer = albumDuration.startTimer({ operation: 'get_albums' });
   
   try {
-    logger.info(`GET /tasks`, { ip: req.ip, userAgent: req.get('User-Agent') });
-    const { page = 1, limit = 10, status, priority, search } = req.query;
+    logger.info(`GET /albums`, { ip: req.ip, userAgent: req.get('User-Agent') });
+    const { page = 1, limit = 10, tags, category, search } = req.query;
     const offset = (page - 1) * limit;
     
     // Check cache first
-    const cacheKey = `${req.user.id}_${page}_${limit}_${status || ''}_${priority || ''}_${search || ''}`;
-    const cached = await getCachedTasks(cacheKey);
+    const cacheKey = `${req.user.id}_${page}_${limit}_${tags || ''}_${category || ''}_${search || ''}`;
+    const cached = await getCachedAlbums(cacheKey);
     if (cached) {
-      logger.debug('Returning cached tasks');
-      taskCounter.labels('get_tasks', 'cache_hit').inc();
+      logger.debug('Returning cached albums');
+      albumCounter.labels('get_albums', 'cache_hit').inc();
       timer();
       return res.json(cached);
     }
     
     let query = `
-      SELECT t.*, 
+      SELECT a.*, 
              COALESCE(
                json_agg(
                  json_build_object(
@@ -418,58 +416,60 @@ app.get('/tasks', authenticate, async (req, res) => {
                    'fileSize', m.size_bytes,
                    'thumbnailUrl', '/api/media/' || m.id || '/thumbnail',
                    'downloadUrl', '/api/media/' || m.id || '/download'
-                 ) ORDER BY tm.created_at
+                 ) ORDER BY am.created_at
                ) FILTER (WHERE m.id IS NOT NULL),
                '[]'::json
              ) as media
-      FROM tasks t
-      LEFT JOIN task_media tm ON t.id = tm.task_id
-      LEFT JOIN media m ON tm.media_id = m.id
-      WHERE t.user_id = $1
+      FROM albums a
+      LEFT JOIN album_media am ON a.id = am.album_id
+      LEFT JOIN media m ON am.media_id = m.id
+      WHERE a.user_id = $1
     `;
     
     let queryParams = [req.user.id];
     let paramIndex = 2;
     
     // Add filters
-    if (status) {
-      query += ` AND t.status = $${paramIndex}`;
-      queryParams.push(status);
+    if (tags) {
+      const tagsArray = Array.isArray(tags) ? tags : [tags];
+      query += ` AND a.tags && $${paramIndex}`;
+      queryParams.push(tagsArray);
       paramIndex++;
     }
     
-    if (priority) {
-      query += ` AND t.priority = $${paramIndex}`;
-      queryParams.push(priority);
+    if (category) {
+      query += ` AND a.category = $${paramIndex}`;
+      queryParams.push(category);
       paramIndex++;
     }
     
     if (search) {
-      query += ` AND (t.title ILIKE $${paramIndex} OR t.description ILIKE $${paramIndex})`;
+      query += ` AND (a.title ILIKE $${paramIndex} OR a.description ILIKE $${paramIndex})`;
       queryParams.push(`%${search}%`);
       paramIndex++;
     }
     
-    query += ` GROUP BY t.id ORDER BY t.created_at DESC`;
+    query += ` GROUP BY a.id ORDER BY a.created_at DESC`;
     query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     queryParams.push(parseInt(limit), parseInt(offset));
     
     const result = await pool.query(query, queryParams);
     
     // Get total count for pagination
-    let countQuery = 'SELECT COUNT(*) FROM tasks WHERE user_id = $1';
+    let countQuery = 'SELECT COUNT(*) FROM albums WHERE user_id = $1';
     let countParams = [req.user.id];
     let countIndex = 2;
     
-    if (status) {
-      countQuery += ` AND status = $${countIndex}`;
-      countParams.push(status);
+    if (tags) {
+      const tagsArray = Array.isArray(tags) ? tags : [tags];
+      countQuery += ` AND tags && $${countIndex}`;
+      countParams.push(tagsArray);
       countIndex++;
     }
     
-    if (priority) {
-      countQuery += ` AND priority = $${countIndex}`;
-      countParams.push(priority);
+    if (category) {
+      countQuery += ` AND category = $${countIndex}`;
+      countParams.push(category);
       countIndex++;
     }
     
@@ -479,74 +479,74 @@ app.get('/tasks', authenticate, async (req, res) => {
     }
     
     const countResult = await pool.query(countQuery, countParams);
-    const totalTasks = parseInt(countResult.rows[0].count);
+    const totalAlbums = parseInt(countResult.rows[0].count);
     
     const response = {
-      tasks: result.rows,
+      albums: result.rows,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
-        total: totalTasks,
-        totalPages: Math.ceil(totalTasks / limit),
-        hasNext: parseInt(page) * parseInt(limit) < totalTasks,
+        total: totalAlbums,
+        totalPages: Math.ceil(totalAlbums / limit),
+        hasNext: parseInt(page) * parseInt(limit) < totalAlbums,
         hasPrevious: parseInt(page) > 1
       }
     };
     
     // Cache the response
-    await setCachedTasks(cacheKey, response);
+    await setCachedAlbums(cacheKey, response);
     
-    taskCounter.labels('get_tasks', 'success').inc();
+    albumCounter.labels('get_albums', 'success').inc();
     timer();
     res.json(response);
   } catch (error) {
-    taskCounter.labels('get_tasks', 'error').inc();
+    albumCounter.labels('get_albums', 'error').inc();
     timer();
-    logger.error('Failed to fetch tasks:', error);
-    res.status(500).json({ error: 'Failed to fetch tasks' });
+    logger.error('Failed to fetch albums:', error);
+    res.status(500).json({ error: 'Failed to fetch albums' });
   }
 });
 
-// Get specific task
-app.get('/tasks/:id', authenticate, async (req, res) => {
-  const timer = taskDuration.startTimer({ operation: 'get_task' });
+// Get specific album
+app.get('/albums/:id', authenticate, async (req, res) => {
+  const timer = albumDuration.startTimer({ operation: 'get_album' });
   
   try {
-    const taskId = req.params.id;
+    const albumId = req.params.id;
     const authHeader = req.headers.authorization;
     
-    const task = await getTaskWithMedia(taskId, req.user.id, authHeader);
+    const album = await getAlbumWithMedia(albumId, req.user.id, authHeader);
     
-    if (!task) {
-      taskCounter.labels('get_task', 'not_found').inc();
+    if (!album) {
+      albumCounter.labels('get_album', 'not_found').inc();
       timer();
-      return res.status(404).json({ error: 'Task not found' });
+      return res.status(404).json({ error: 'Album not found' });
     }
     
-    taskCounter.labels('get_task', 'success').inc();
+    albumCounter.labels('get_album', 'success').inc();
     timer();
     res.json({
       success: true,
-      data: task
+      data: album
     });
   } catch (error) {
-    taskCounter.labels('get_task', 'error').inc();
+    albumCounter.labels('get_album', 'error').inc();
     timer();
-    logger.error('Failed to fetch task:', error);
-    res.status(500).json({ error: 'Failed to fetch task' });
+    logger.error('Failed to fetch album:', error);
+    res.status(500).json({ error: 'Failed to fetch album' });
   }
 });
 
-// Create new task
-app.post('/tasks', authenticate, async (req, res) => {
-  const timer = taskDuration.startTimer({ operation: 'create_task' });
+// Create new album
+app.post('/albums', authenticate, async (req, res) => {
+  const timer = albumDuration.startTimer({ operation: 'create_album' });
   const client = await pool.connect();
   
   try {
     // Validate request body
-    const { error, value } = taskSchema.validate(req.body);
+    const { error, value } = albumSchema.validate(req.body);
     if (error) {
-      taskCounter.labels('create_task', 'validation_error').inc();
+      albumCounter.labels('create_album', 'validation_error').inc();
       timer();
       return res.status(400).json({ 
         error: 'Validation failed',
@@ -554,18 +554,18 @@ app.post('/tasks', authenticate, async (req, res) => {
       });
     }
     
-    const { title, description, priority, status, dueDate, mediaIds } = value;
+    const { title, description, tags, category, mediaIds } = value;
     
     await client.query('BEGIN');
     
-    // Create the task
-    const taskResult = await client.query(
-      `INSERT INTO tasks (user_id, title, description, priority, status, due_date) 
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [req.user.id, title, description, priority, status, dueDate]
+    // Create the album
+    const albumResult = await client.query(
+      `INSERT INTO albums (user_id, title, description, tags, category) 
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [req.user.id, title, description, tags, category]
     );
     
-    const task = taskResult.rows[0];
+    const album = albumResult.rows[0];
     
     // Attach media files if provided
     if (mediaIds && mediaIds.length > 0) {
@@ -583,56 +583,56 @@ app.post('/tasks', authenticate, async (req, res) => {
         ).join(', ');
         
         await client.query(
-          `INSERT INTO task_media (task_id, media_id) VALUES ${mediaInserts}`,
-          [task.id, ...validMediaIds]
+          `INSERT INTO album_media (album_id, media_id) VALUES ${mediaInserts}`,
+          [album.id, ...validMediaIds]
         );
       }
     }
     
     await client.query('COMMIT');
     
-    // Get the complete task with media
-    const completeTask = await getTaskWithMedia(task.id, req.user.id);
+    // Get the complete album with media
+    const completeAlbum = await getAlbumWithMedia(album.id, req.user.id);
     
-    // Invalidate user's task cache
+    // Invalidate user's album cache
     await invalidateUserCache(req.user.id);
     
     // Publish event
-    await publishEvent('task.created', {
-      taskId: task.id,
+    await publishEvent('album.created', {
+      albumId: album.id,
       userId: req.user.id,
-      title: task.title,
-      status: task.status,
-      priority: task.priority,
+      title: album.title,
+      tags: album.tags,
+      category: album.category,
       mediaCount: mediaIds ? mediaIds.length : 0
     });
     
-    taskCounter.labels('create_task', 'success').inc();
+    albumCounter.labels('create_album', 'success').inc();
     timer();
-    logger.info('Task created', { taskId: task.id, userId: req.user.id });
+    logger.info('Album created', { albumId: album.id, userId: req.user.id });
     
     res.status(201).json({
-      message: 'Task created successfully',
-      task: completeTask
+      message: 'Album created successfully',
+      album: completeAlbum
     });
   } catch (error) {
     await client.query('ROLLBACK');
-    taskCounter.labels('create_task', 'error').inc();
+    albumCounter.labels('create_album', 'error').inc();
     timer();
-    logger.error('Failed to create task:', error);
-    res.status(500).json({ error: 'Failed to create task' });
+    logger.error('Failed to create album:', error);
+    res.status(500).json({ error: 'Failed to create album' });
   } finally {
     client.release();
   }
 });
 
-// Attach media to task
-app.post('/tasks/:id/media', authenticate, async (req, res) => {
-  const timer = taskDuration.startTimer({ operation: 'attach_media' });
+// Attach media to album
+app.post('/albums/:id/media', authenticate, async (req, res) => {
+  const timer = albumDuration.startTimer({ operation: 'attach_media' });
   const client = await pool.connect();
   
   try {
-    const taskId = req.params.id;
+    const albumId = req.params.id;
     const { error, value } = attachMediaSchema.validate(req.body);
     
     if (error) {
@@ -647,16 +647,16 @@ app.post('/tasks/:id/media', authenticate, async (req, res) => {
     
     await client.query('BEGIN');
     
-    // Verify task belongs to user
-    const taskResult = await client.query(
-      'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
-      [taskId, req.user.id]
+    // Verify album belongs to user
+    const albumResult = await client.query(
+      'SELECT id FROM albums WHERE id = $1 AND user_id = $2',
+      [albumId, req.user.id]
     );
     
-    if (taskResult.rows.length === 0) {
+    if (albumResult.rows.length === 0) {
       await client.query('ROLLBACK');
       timer();
-      return res.status(404).json({ error: 'Task not found' });
+      return res.status(404).json({ error: 'Album not found' });
     }
     
     // Verify media belongs to user
@@ -673,20 +673,20 @@ app.post('/tasks/:id/media', authenticate, async (req, res) => {
     
     // Check if already attached
     const existingResult = await client.query(
-      'SELECT id FROM task_media WHERE task_id = $1 AND media_id = $2',
-      [taskId, mediaId]
+      'SELECT id FROM album_media WHERE album_id = $1 AND media_id = $2',
+      [albumId, mediaId]
     );
     
     if (existingResult.rows.length > 0) {
       await client.query('ROLLBACK');
       timer();
-      return res.status(409).json({ error: 'Media already attached to task' });
+      return res.status(409).json({ error: 'Media already attached to album' });
     }
     
-    // Attach media to task
+    // Attach media to album
     await client.query(
-      'INSERT INTO task_media (task_id, media_id) VALUES ($1, $2)',
-      [taskId, mediaId]
+      'INSERT INTO album_media (album_id, media_id) VALUES ($1, $2)',
+      [albumId, mediaId]
     );
     
     await client.query('COMMIT');
@@ -695,57 +695,57 @@ app.post('/tasks/:id/media', authenticate, async (req, res) => {
     await invalidateUserCache(req.user.id);
     
     // Publish event
-    await publishEvent('task.media_attached', {
-      taskId: parseInt(taskId),
+    await publishEvent('album.media_attached', {
+      albumId: parseInt(albumId),
       mediaId,
       userId: req.user.id
     });
     
     timer();
-    res.json({ message: 'Media attached to task successfully' });
+    res.json({ message: 'Media attached to album successfully' });
     
   } catch (error) {
     await client.query('ROLLBACK');
     timer();
-    logger.error('Failed to attach media to task:', error);
-    res.status(500).json({ error: 'Failed to attach media to task' });
+    logger.error('Failed to attach media to album:', error);
+    res.status(500).json({ error: 'Failed to attach media to album' });
   } finally {
     client.release();
   }
 });
 
-// Remove media from task
-app.delete('/tasks/:id/media/:mediaId', authenticate, async (req, res) => {
-  const timer = taskDuration.startTimer({ operation: 'detach_media' });
+// Remove media from album
+app.delete('/albums/:id/media/:mediaId', authenticate, async (req, res) => {
+  const timer = albumDuration.startTimer({ operation: 'detach_media' });
   const client = await pool.connect();
   
   try {
-    const { id: taskId, mediaId } = req.params;
+    const { id: albumId, mediaId } = req.params;
     
     await client.query('BEGIN');
     
-    // Verify task belongs to user
-    const taskResult = await client.query(
-      'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
-      [taskId, req.user.id]
+    // Verify album belongs to user
+    const albumResult = await client.query(
+      'SELECT id FROM albums WHERE id = $1 AND user_id = $2',
+      [albumId, req.user.id]
     );
     
-    if (taskResult.rows.length === 0) {
+    if (albumResult.rows.length === 0) {
       await client.query('ROLLBACK');
       timer();
-      return res.status(404).json({ error: 'Task not found' });
+      return res.status(404).json({ error: 'Album not found' });
     }
     
     // Remove the association
     const deleteResult = await client.query(
-      'DELETE FROM task_media WHERE task_id = $1 AND media_id = $2',
-      [taskId, mediaId]
+      'DELETE FROM album_media WHERE album_id = $1 AND media_id = $2',
+      [albumId, mediaId]
     );
     
     if (deleteResult.rowCount === 0) {
       await client.query('ROLLBACK');
       timer();
-      return res.status(404).json({ error: 'Media not attached to this task' });
+      return res.status(404).json({ error: 'Media not attached to this album' });
     }
     
     await client.query('COMMIT');
@@ -754,48 +754,48 @@ app.delete('/tasks/:id/media/:mediaId', authenticate, async (req, res) => {
     await invalidateUserCache(req.user.id);
     
     // Publish event
-    await publishEvent('task.media_detached', {
-      taskId: parseInt(taskId),
+    await publishEvent('album.media_detached', {
+      albumId: parseInt(albumId),
       mediaId: parseInt(mediaId),
       userId: req.user.id
     });
     
     timer();
-    res.json({ message: 'Media removed from task successfully' });
+    res.json({ message: 'Media removed from album successfully' });
     
   } catch (error) {
     await client.query('ROLLBACK');
     timer();
-    logger.error('Failed to remove media from task:', error);
-    res.status(500).json({ error: 'Failed to remove media from task' });
+    logger.error('Failed to remove media from album:', error);
+    res.status(500).json({ error: 'Failed to remove media from album' });
   } finally {
     client.release();
   }
 });
 
-// Get task media
-app.get('/tasks/:id/media', authenticate, async (req, res) => {
+// Get album media
+app.get('/albums/:id/media', authenticate, async (req, res) => {
   try {
-    const taskId = req.params.id;
+    const albumId = req.params.id;
     
-    // Verify task belongs to user
-    const taskResult = await pool.query(
-      'SELECT id FROM tasks WHERE id = $1 AND user_id = $2',
-      [taskId, req.user.id]
+    // Verify album belongs to user
+    const albumResult = await pool.query(
+      'SELECT id FROM albums WHERE id = $1 AND user_id = $2',
+      [albumId, req.user.id]
     );
     
-    if (taskResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Task not found' });
+    if (albumResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Album not found' });
     }
     
-    // Get task media
+    // Get album media
     const mediaResult = await pool.query(`
       SELECT m.*
       FROM media m
-      JOIN task_media tm ON m.id = tm.media_id
-      WHERE tm.task_id = $1
-      ORDER BY tm.created_at
-    `, [taskId]);
+      JOIN album_media am ON m.id = am.media_id
+      WHERE am.album_id = $1
+      ORDER BY am.created_at
+    `, [albumId]);
     
     const media = mediaResult.rows.map(media => ({
       id: media.id,
@@ -814,22 +814,22 @@ app.get('/tasks/:id/media', authenticate, async (req, res) => {
     });
     
   } catch (error) {
-    logger.error('Failed to fetch task media:', error);
-    res.status(500).json({ error: 'Failed to fetch task media' });
+    logger.error('Failed to fetch album media:', error);
+    res.status(500).json({ error: 'Failed to fetch album media' });
   }
 });
-// Update task
-app.put('/tasks/:id', authenticate, async (req, res) => {
-  const timer = taskDuration.startTimer({ operation: 'update_task' });
+// Update album
+app.put('/albums/:id', authenticate, async (req, res) => {
+  const timer = albumDuration.startTimer({ operation: 'update_album' });
   const client = await pool.connect();
   
   try {
-    const taskId = req.params.id;
+    const albumId = req.params.id;
     
     // Validate request body
-    const { error, value } = updateTaskSchema.validate(req.body);
+    const { error, value } = updateAlbumSchema.validate(req.body);
     if (error) {
-      taskCounter.labels('update_task', 'validation_error').inc();
+      albumCounter.labels('update_album', 'validation_error').inc();
       timer();
       return res.status(400).json({ 
         error: 'Validation failed',
@@ -837,18 +837,18 @@ app.put('/tasks/:id', authenticate, async (req, res) => {
       });
     }
     
-    const { mediaIds, ...taskUpdates } = value;
+    const { mediaIds, ...albumUpdates } = value;
     
     await client.query('BEGIN');
     
-    // Update task basic fields if any are provided
-    if (Object.keys(taskUpdates).length > 0) {
-      const setClause = Object.keys(taskUpdates)
-        .map((key, index) => `${key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)} = $${index + 3}`)
+    // Update album basic fields if any are provided
+    if (Object.keys(albumUpdates).length > 0) {
+      const setClause = Object.keys(albumUpdates)
+        .map((key, index) => `${key} = $${index + 3}`)
         .join(', ');
       
       const query = `
-        UPDATE tasks SET 
+        UPDATE albums SET 
         ${setClause},
         updated_at = CURRENT_TIMESTAMP
         WHERE id = $1 AND user_id = $2 RETURNING *
@@ -856,14 +856,14 @@ app.put('/tasks/:id', authenticate, async (req, res) => {
       
       const result = await client.query(
         query,
-        [taskId, req.user.id, ...Object.values(taskUpdates)]
+        [albumId, req.user.id, ...Object.values(albumUpdates)]
       );
       
       if (result.rows.length === 0) {
         await client.query('ROLLBACK');
-        taskCounter.labels('update_task', 'not_found').inc();
+        albumCounter.labels('update_album', 'not_found').inc();
         timer();
-        return res.status(404).json({ error: 'Task not found' });
+        return res.status(404).json({ error: 'Album not found' });
       }
     }
     
@@ -871,8 +871,8 @@ app.put('/tasks/:id', authenticate, async (req, res) => {
     if (mediaIds && mediaIds.length >= 0) {
       // Remove all existing media attachments
       await client.query(
-        'DELETE FROM task_media WHERE task_id = $1',
-        [taskId]
+        'DELETE FROM album_media WHERE album_id = $1',
+        [albumId]
       );
       
       // Add new media attachments
@@ -892,10 +892,10 @@ app.put('/tasks/:id', authenticate, async (req, res) => {
             });
           }
           
-          // Attach media to task
+          // Attach media to album
           await client.query(
-            'INSERT INTO task_media (task_id, media_id) VALUES ($1, $2)',
-            [taskId, mediaId]
+            'INSERT INTO album_media (album_id, media_id) VALUES ($1, $2)',
+            [albumId, mediaId]
           );
         }
       }
@@ -903,36 +903,36 @@ app.put('/tasks/:id', authenticate, async (req, res) => {
     
     await client.query('COMMIT');
     
-    // Get complete task with media
-    const completeTask = await getTaskWithMedia(taskId, req.user.id);
+    // Get complete album with media
+    const completeAlbum = await getAlbumWithMedia(albumId, req.user.id);
     
-    // Invalidate user's task cache
+    // Invalidate user's album cache
     await invalidateUserCache(req.user.id);
     
     // Publish event
-    await publishEvent('task.updated', {
-      taskId: parseInt(taskId),
+    await publishEvent('album.updated', {
+      albumId: parseInt(albumId),
       userId: req.user.id,
-      changes: Object.keys(taskUpdates),
+      changes: Object.keys(albumUpdates),
       mediaUpdated: mediaIds !== undefined
     });
     
-    taskCounter.labels('update_task', 'success').inc();
+    albumCounter.labels('update_album', 'success').inc();
     timer();
-    logger.info('Task updated', { taskId, userId: req.user.id });
+    logger.info('Album updated', { albumId, userId: req.user.id });
     
     res.json({
-      message: 'Task updated successfully',
-      task: completeTask
+      message: 'Album updated successfully',
+      album: completeAlbum
     });
   } catch (error) {
     if (client) {
       await client.query('ROLLBACK');
     }
-    taskCounter.labels('update_task', 'error').inc();
+    albumCounter.labels('update_album', 'error').inc();
     timer();
-    logger.error('Failed to update task:', error);
-    res.status(500).json({ error: 'Failed to update task' });
+    logger.error('Failed to update album:', error);
+    res.status(500).json({ error: 'Failed to update album' });
   } finally {
     if (client) {
       client.release();
@@ -940,82 +940,82 @@ app.put('/tasks/:id', authenticate, async (req, res) => {
   }
 });
 
-// Delete task
-app.delete('/tasks/:id', authenticate, async (req, res) => {
-  const timer = taskDuration.startTimer({ operation: 'delete_task' });
+// Delete album
+app.delete('/albums/:id', authenticate, async (req, res) => {
+  const timer = albumDuration.startTimer({ operation: 'delete_album' });
   const client = await pool.connect();
   
   try {
-    const taskId = req.params.id;
+    const albumId = req.params.id;
     
     await client.query('BEGIN');
     
-    // Get task details before deletion for event
-    const taskResult = await client.query(
-      'SELECT * FROM tasks WHERE id = $1 AND user_id = $2',
-      [taskId, req.user.id]
+    // Get album details before deletion for event
+    const albumResult = await client.query(
+      'SELECT * FROM albums WHERE id = $1 AND user_id = $2',
+      [albumId, req.user.id]
     );
     
-    if (taskResult.rows.length === 0) {
+    if (albumResult.rows.length === 0) {
       await client.query('ROLLBACK');
-      taskCounter.labels('delete_task', 'not_found').inc();
+      albumCounter.labels('delete_album', 'not_found').inc();
       timer();
-      return res.status(404).json({ error: 'Task not found' });
+      return res.status(404).json({ error: 'Album not found' });
     }
     
-    const task = taskResult.rows[0];
+    const album = albumResult.rows[0];
     
-    // Delete task (cascade will handle task_media)
+    // Delete album (cascade will handle album_media)
     await client.query(
-      'DELETE FROM tasks WHERE id = $1 AND user_id = $2',
-      [taskId, req.user.id]
+      'DELETE FROM albums WHERE id = $1 AND user_id = $2',
+      [albumId, req.user.id]
     );
     
     await client.query('COMMIT');
     
-    // Invalidate user's task cache
+    // Invalidate user's album cache
     await invalidateUserCache(req.user.id);
     
     // Publish event
-    await publishEvent('task.deleted', {
-      taskId: task.id,
+    await publishEvent('album.deleted', {
+      albumId: album.id,
       userId: req.user.id,
-      title: task.title,
-      status: task.status
+      title: album.title,
+      category: album.category
     });
     
-    taskCounter.labels('delete_task', 'success').inc();
+    albumCounter.labels('delete_album', 'success').inc();
     timer();
-    logger.info('Task deleted', { taskId, userId: req.user.id });
+    logger.info('Album deleted', { albumId, userId: req.user.id });
     
     res.json({
       success: true,
-      message: 'Task deleted successfully'
+      message: 'Album deleted successfully'
     });
   } catch (error) {
     await client.query('ROLLBACK');
-    taskCounter.labels('delete_task', 'error').inc();
+    albumCounter.labels('delete_album', 'error').inc();
     timer();
-    logger.error('Failed to delete task:', error);
-    res.status(500).json({ error: 'Failed to delete task' });
+    logger.error('Failed to delete album:', error);
+    res.status(500).json({ error: 'Failed to delete album' });
   } finally {
     client.release();
   }
 });
 
-// Get task statistics
-app.get('/tasks/stats/summary', authenticate, async (req, res) => {
+// Get album statistics
+app.get('/albums/stats/summary', authenticate, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
         COUNT(*) as total,
-        COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
-        COUNT(CASE WHEN status = 'in-progress' THEN 1 END) as in_progress,
-        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
-        COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled,
-        COUNT(CASE WHEN priority = 'high' THEN 1 END) as high_priority,
-        COUNT(CASE WHEN due_date < CURRENT_DATE AND status != 'completed' THEN 1 END) as overdue
-      FROM tasks WHERE user_id = $1
+        COUNT(CASE WHEN 'childhood' = ANY(tags) THEN 1 END) as childhood,
+        COUNT(CASE WHEN 'love' = ANY(tags) THEN 1 END) as love,
+        COUNT(CASE WHEN 'family' = ANY(tags) THEN 1 END) as family,
+        COUNT(CASE WHEN category = 'nostalgia' THEN 1 END) as nostalgia,
+        COUNT(CASE WHEN category = 'happiness' THEN 1 END) as happiness,
+        COUNT(CASE WHEN category = 'inspiration' THEN 1 END) as inspiration
+      FROM albums WHERE user_id = $1
     `, [req.user.id]);
     
     res.json({
@@ -1023,8 +1023,8 @@ app.get('/tasks/stats/summary', authenticate, async (req, res) => {
       data: result.rows[0]
     });
   } catch (error) {
-    logger.error('Failed to fetch task statistics:', error);
-    res.status(500).json({ error: 'Failed to fetch task statistics' });
+    logger.error('Failed to fetch album statistics:', error);
+    res.status(500).json({ error: 'Failed to fetch album statistics' });
   }
 });
 
@@ -1051,6 +1051,6 @@ process.on('SIGTERM', () => {
 
 const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
-  logger.info(`Task service running on port ${PORT}`);
-  console.log(`Task service running on port ${PORT}`);
+  logger.info(`Album service running on port ${PORT}`);
+  console.log(`Album service running on port ${PORT}`);
 });

@@ -1,0 +1,66 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-albums-table
+  namespace: task-manager
+spec:
+  template:
+    spec:
+      containers:
+      - name: create-albums
+        image: postgres:13
+        env:
+        - name: PGPASSWORD
+          value: "Shree@2025"
+        command: ["psql"]
+        args: 
+        - "-h"
+        - "34.122.121.162"
+        - "-U"
+        - "taskuser"
+        - "-d"
+        - "taskmanager"
+        - "-c"
+        - |
+          CREATE TABLE IF NOT EXISTS albums (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              title VARCHAR(255) NOT NULL,
+              description TEXT,
+              tags TEXT[],
+              category VARCHAR(50) DEFAULT 'memories',
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          
+          CREATE TABLE IF NOT EXISTS album_media (
+              id SERIAL PRIMARY KEY,
+              album_id INTEGER NOT NULL,
+              media_id INTEGER NOT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(album_id, media_id)
+          );
+          
+          CREATE TABLE IF NOT EXISTS media_files (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              filename VARCHAR(255) NOT NULL,
+              original_name VARCHAR(255) NOT NULL,
+              mime_type VARCHAR(100) NOT NULL,
+              size INTEGER NOT NULL,
+              path VARCHAR(500) NOT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          
+          CREATE INDEX IF NOT EXISTS idx_albums_user_id ON albums(user_id);
+          CREATE INDEX IF NOT EXISTS idx_albums_category ON albums(category);
+          CREATE INDEX IF NOT EXISTS idx_album_media_album_id ON album_media(album_id);
+          CREATE INDEX IF NOT EXISTS idx_media_files_user_id ON media_files(user_id);
+          
+          INSERT INTO albums (user_id, title, description, tags, category) VALUES
+          (1, 'My Childhood Memories', 'Beautiful moments from my childhood', ARRAY['childhood', 'family', 'happiness'], 'nostalgia'),
+          (1, 'Travel Adventures', 'Amazing places I have visited', ARRAY['travel', 'adventure', 'nature'], 'exploration'),
+          (1, 'Special Occasions', 'Birthdays, celebrations and special moments', ARRAY['celebration', 'birthday', 'friends'], 'happiness')
+          ON CONFLICT DO NOTHING;
+      restartPolicy: Never
+  backoffLimit: 3

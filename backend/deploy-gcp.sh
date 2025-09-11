@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# GCP Deployment Script for Task Manager Microservices
-# This script deploys the complete Task Manager application to Google Cloud Platform
+# GCP Deployment Script for Photo Albums Microservices
+# This script deploys the complete Photo Albums application to Google Cloud Platform
 
 set -e
 
@@ -66,7 +66,8 @@ get_configuration() {
     
     # Project ID
     if [ -z "$PROJECT_ID" ]; then
-        read -p "Enter your GCP Project ID: " PROJECT_ID
+        PROJECT_ID="circular-hash-459513-q5"
+        print_status "Using project ID: $PROJECT_ID"
     fi
     
     # Region
@@ -82,7 +83,7 @@ get_configuration() {
     fi
     
     # Cluster name
-    CLUSTER_NAME="task-manager-cluster"
+    CLUSTER_NAME="photo-albums-cluster"
     
     # Database password
     if [ -z "$DB_PASSWORD" ]; then
@@ -186,17 +187,17 @@ create_k8s_service_account() {
     print_header "Creating Kubernetes service account..."
     
     # Create namespace
-    kubectl create namespace task-manager --dry-run=client -o yaml | kubectl apply -f -
+    kubectl create namespace photo-albums --dry-run=client -o yaml | kubectl apply -f -
     
     # Create Kubernetes service account
-    kubectl create serviceaccount task-manager-ksa \
-        --namespace task-manager \
+    kubectl create serviceaccount photo-albums-ksa \
+        --namespace photo-albums \
         --dry-run=client -o yaml | kubectl apply -f -
     
     # Annotate service account for Workload Identity
-    kubectl annotate serviceaccount task-manager-ksa \
-        --namespace task-manager \
-        iam.gke.io/gcp-service-account=task-manager-app@$PROJECT_ID.iam.gserviceaccount.com \
+    kubectl annotate serviceaccount photo-albums-ksa \
+        --namespace photo-albums \
+        iam.gke.io/gcp-service-account=photo-albums-app@$PROJECT_ID.iam.gserviceaccount.com \
         --overwrite
     
     print_status "Kubernetes service account created."
@@ -239,26 +240,26 @@ create_secrets() {
     
     # Create database secret
     kubectl create secret generic db-secret \
-        --namespace=task-manager \
-        --from-literal=username=taskuser \
+        --namespace=photo-albums \
+        --from-literal=username=albumuser \
         --from-literal=password=$DB_PASSWORD \
         --dry-run=client -o yaml | kubectl apply -f -
     
     # Create JWT secret
     JWT_SECRET=$(openssl rand -base64 32)
     kubectl create secret generic auth-secret \
-        --namespace=task-manager \
+        --namespace=photo-albums \
         --from-literal=jwt-secret=$JWT_SECRET \
         --dry-run=client -o yaml | kubectl apply -f -
     
     # Create SMTP secret (you'll need to update these values)
     kubectl create secret generic smtp-secret \
-        --namespace=task-manager \
+        --namespace=photo-albums \
         --from-literal=host=smtp.gmail.com \
         --from-literal=port=587 \
-        --from-literal=user=noreply@taskmanager.com \
+        --from-literal=user=noreply@photoalbums.com \
         --from-literal=password=your-app-password \
-        --from-literal=from="Task Manager <noreply@taskmanager.com>" \
+        --from-literal=from="Photo Albums <noreply@photoalbums.com>" \
         --dry-run=client -o yaml | kubectl apply -f -
     
     print_status "Kubernetes secrets created."
@@ -281,12 +282,12 @@ deploy_to_kubernetes() {
     
     # Wait for infrastructure services to be ready
     print_status "Waiting for infrastructure services to be ready..."
-    kubectl wait --for=condition=ready pod -l app=postgresql --namespace=task-manager --timeout=300s
-    kubectl wait --for=condition=ready pod -l app=redis --namespace=task-manager --timeout=300s
+    kubectl wait --for=condition=ready pod -l app=postgresql --namespace=photo-albums --timeout=300s
+    kubectl wait --for=condition=ready pod -l app=redis --namespace=photo-albums --timeout=300s
     
     # Deploy application services
     kubectl apply -f k8s/services/auth-service/deployment.yaml
-    kubectl apply -f k8s/services/task-service/deployment.yaml
+    kubectl apply -f k8s/services/album-service/deployment.yaml
     kubectl apply -f k8s/services/media-service/deployment.yaml
     kubectl apply -f k8s/services/notification-service/deployment.yaml
     kubectl apply -f k8s/services/gateway/deployment.yaml
@@ -308,7 +309,7 @@ wait_for_deployment() {
     print_header "Waiting for deployment to be ready..."
     
     # Wait for all deployments to be ready
-    kubectl wait --for=condition=available deployment --all --namespace=task-manager --timeout=600s
+    kubectl wait --for=condition=available deployment --all --namespace=photo-albums --timeout=600s
     
     print_status "All deployments are ready."
 }
@@ -319,19 +320,19 @@ get_deployment_info() {
     
     # Get service endpoints
     print_status "Getting service information..."
-    kubectl get services --namespace=task-manager
+    kubectl get services --namespace=photo-albums
     
     # Get ingress information
     print_status "Getting ingress information..."
-    kubectl get ingress --namespace=task-manager
+    kubectl get ingress --namespace=photo-albums
     
     # Get pod status
     print_status "Getting pod status..."
-    kubectl get pods --namespace=task-manager
+    kubectl get pods --namespace=photo-albums
     
     # Get external IPs
     print_status "External IP addresses:"
-    gcloud compute addresses list --filter="name:frontend-ip OR name:task-manager-ip"
+    gcloud compute addresses list --filter="name:photo-albums-frontend-ip OR name:photo-albums-api-ip"
     
     print_status "Deployment completed successfully!"
     
@@ -358,7 +359,7 @@ cleanup() {
 
 # Main execution
 main() {
-    print_header "Task Manager GCP Deployment Script"
+    print_header "Photo Albums GCP Deployment Script"
     print_status "Starting deployment process..."
     
     # Trap cleanup on exit

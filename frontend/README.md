@@ -1,6 +1,6 @@
 # Frontend README
 
-This is a Next.js frontend application for the Task Manager microservices project.
+This is a Next.js frontend application for the Photo Albums microservices project.
 
 ## Getting Started
 
@@ -29,11 +29,12 @@ The application will be available at `http://localhost:3100`.
 ## Features
 
 - User authentication (register/login/logout)
-- Task management (CRUD operations)
-- Task filtering and search
-- Task statistics dashboard
-- File upload for task attachments
+- Photo album management (CRUD operations)
+- Google Photos-style photo grid layout
+- Album filtering and search by tags and categories
+- Media upload and management
 - Responsive design with Tailwind CSS
+- Photo viewer with full-screen mode and navigation
 
 ## Project Structure
 

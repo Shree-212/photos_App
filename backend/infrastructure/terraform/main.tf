@@ -1,4 +1,4 @@
-# Task Manager GCP Infrastructure - Simplified Version
+# Photo Albums GCP Infrastructure - Simplified Version
 
 terraform {
   required_version = ">= 1.0"
@@ -18,6 +18,7 @@ terraform {
 variable "project_id" {
   description = "GCP Project ID"
   type        = string
+  default     = "circular-hash-459513-q5"
 }
 
 variable "region" {
@@ -41,25 +42,25 @@ variable "environment" {
 variable "app_name" {
   description = "Application name"
   type        = string
-  default     = "taskmanager"
+  default     = "photo-albums"
 }
 
 variable "domain_name" {
   description = "Domain name for the application"
   type        = string
-  default     = "taskmanager.example.com"
+  default     = "photoalbums.example.com"
 }
 
 variable "db_name" {
   description = "Database name"
   type        = string
-  default     = "taskmanager_prod"
+  default     = "photoalbums_prod"
 }
 
 variable "db_user" {
   description = "Database user"
   type        = string
-  default     = "taskmanager_user"
+  default     = "photoalbums_user"
 }
 
 variable "db_password" {
@@ -127,13 +128,13 @@ resource "google_project_service" "required_apis" {
 
 # VPC Network (Simplified)
 resource "google_compute_network" "vpc" {
-  name                    = "task-manager-vpc"
+  name                    = "photo-albums-vpc"
   auto_create_subnetworks = false
   depends_on              = [google_project_service.required_apis]
 }
 
 resource "google_compute_subnetwork" "subnet" {
-  name          = "task-manager-subnet"
+  name          = "photo-albums-subnet"
   ip_cidr_range = "10.0.0.0/16"
   region        = var.region
   network       = google_compute_network.vpc.id
@@ -151,16 +152,16 @@ resource "google_compute_subnetwork" "subnet" {
 
 # Static IP addresses
 resource "google_compute_global_address" "frontend_ip" {
-  name = "frontend-ip"
+  name = "photo-albums-frontend-ip"
 }
 
 resource "google_compute_global_address" "api_ip" {
-  name = "task-manager-ip"
+  name = "photo-albums-api-ip"
 }
 
 # GKE Cluster (Simplified - using default service account)
-resource "google_container_cluster" "task_manager" {
-  name     = "task-manager-cluster"
+resource "google_container_cluster" "photo_albums" {
+  name     = "photo-albums-cluster"
   location = var.zone
 
   # We can't just remove the default node pool, so we need to set node_count to 1
@@ -202,11 +203,11 @@ resource "google_container_cluster" "task_manager" {
     ]
 
     labels = {
-      application = "task-manager"
+      application = "photo-albums"
       environment = var.environment
     }
 
-    tags = ["task-manager", "gke-node"]
+    tags = ["photo-albums", "gke-node"]
   }
 
   depends_on = [google_project_service.required_apis]
@@ -214,7 +215,7 @@ resource "google_container_cluster" "task_manager" {
 
 # Cloud SQL (Simplified - Public IP)
 resource "google_sql_database_instance" "postgres" {
-  name             = "task-manager-postgres"
+  name             = "photo-albums-postgres"
   database_version = "POSTGRES_13"
   region           = var.region
 
@@ -242,12 +243,12 @@ resource "google_sql_database_instance" "postgres" {
 }
 
 resource "google_sql_database" "database" {
-  name     = "taskmanager"
+  name     = "photoalbums"
   instance = google_sql_database_instance.postgres.name
 }
 
 resource "google_sql_user" "users" {
-  name     = "taskuser"
+  name     = "albumuser"
   instance = google_sql_database_instance.postgres.name
   password = var.db_password
 }
@@ -292,22 +293,22 @@ resource "google_storage_bucket" "media" {
 }
 
 # Pub/Sub (Simplified)
-resource "google_pubsub_topic" "task_events" {
-  name = "task-manager-events"
+resource "google_pubsub_topic" "album_events" {
+  name = "photo-albums-events"
 
   labels = {
-    application = "task-manager"
+    application = "photo-albums"
     environment = var.environment
   }
 }
 
 resource "google_pubsub_topic" "dead_letter" {
-  name = "task-manager-dead-letter"
+  name = "photo-albums-dead-letter"
 }
 
-resource "google_pubsub_subscription" "task_events_subscription" {
-  name  = "task-manager-events-subscription"
-  topic = google_pubsub_topic.task_events.name
+resource "google_pubsub_subscription" "album_events_subscription" {
+  name  = "photo-albums-events-subscription"
+  topic = google_pubsub_topic.album_events.name
 
   ack_deadline_seconds = 20
   message_retention_duration = "86400s"  # 1 day (matches expiration)
@@ -330,15 +331,15 @@ resource "google_pubsub_subscription" "task_events_subscription" {
 
 # Outputs
 output "cluster_name" {
-  value = google_container_cluster.task_manager.name
+  value = google_container_cluster.photo_albums.name
 }
 
 output "cluster_location" {
-  value = google_container_cluster.task_manager.location
+  value = google_container_cluster.photo_albums.location
 }
 
 output "cluster_endpoint" {
-  value = google_container_cluster.task_manager.endpoint
+  value = google_container_cluster.photo_albums.endpoint
 }
 
 output "frontend_ip" {
@@ -362,5 +363,5 @@ output "storage_bucket" {
 }
 
 output "pubsub_topic" {
-  value = google_pubsub_topic.task_events.name
+  value = google_pubsub_topic.album_events.name
 }

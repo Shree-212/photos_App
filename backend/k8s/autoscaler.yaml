@@ -2,7 +2,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: auth-service-hpa
-  namespace: task-manager
+  namespace: photo-albums
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -29,7 +29,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: task-service-hpa
-  namespace: task-manager
+  namespace: photo-albums
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -56,7 +56,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: api-gateway-hpa
-  namespace: task-manager
+  namespace: photo-albums
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -83,7 +83,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: media-service-hpa
-  namespace: task-manager
+  namespace: photo-albums
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -110,7 +110,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: notification-service-hpa
-  namespace: task-manager
+  namespace: photo-albums
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

@@ -5,11 +5,28 @@ steps:
       - '-f'
       - 'Dockerfile.prod'
       - '-t'
-      - 'gcr.io/circular-hash-459513-q5/frontend:latest'
+      - 'gcr.io/circular-hash-459513-q5/photo-albums-frontend:$BUILD_ID'
+      - '-t'
+      - 'gcr.io/circular-hash-459513-q5/photo-albums-frontend:latest'
       - '.'
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'gcr.io/circular-hash-459513-q5/frontend:latest'
-images:
-  - 'gcr.io/circular-hash-459513-q5/frontend:latest'
+      - 'gcr.io/circular-hash-459513-q5/photo-albums-frontend:$BUILD_ID'
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/circular-hash-459513-q5/photo-albums-frontend:latest'
+
+# Store build logs
+options:
+  logging: CLOUD_LOGGING_ONLY
+  logStreamingOption: STREAM_ON
+
+# Tags for build identification
+tags:
+- 'photo-albums'
+- 'frontend'
+
+# Timeout
+timeout: 600s

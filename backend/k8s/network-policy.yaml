@@ -2,7 +2,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: task-manager-network-policy
-  namespace: task-manager
+  namespace: photo-albums
 spec:
   podSelector: {}
   policyTypes:

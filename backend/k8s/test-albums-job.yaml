@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-albums-endpoint
+  namespace: task-manager
+spec:
+  template:
+    spec:
+      containers:
+      - name: curl-test
+        image: curlimages/curl
+        command: ["curl"]
+        args: 
+        - "-v"
+        - "-H"
+        - "Content-Type: application/json"
+        - "http://task-service.task-manager.svc.cluster.local:80/albums"
+      restartPolicy: Never
+  backoffLimit: 3

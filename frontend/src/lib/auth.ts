@@ -33,11 +33,15 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid, redirect to login
-      Cookies.remove('token');
-      Cookies.remove('user');
-      if (typeof window !== 'undefined') {
-        window.location.href = '/auth/login';
+      // Token expired or invalid - only redirect if we're not already on login page
+      const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
+      if (currentPath !== '/auth/login' && currentPath !== '/auth/register') {
+        console.log('401 error detected, clearing auth and redirecting to login');
+        Cookies.remove('token');
+        Cookies.remove('user');
+        if (typeof window !== 'undefined') {
+          window.location.href = '/auth/login';
+        }
       }
     }
     return Promise.reject(error);

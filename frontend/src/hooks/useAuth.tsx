@@ -31,16 +31,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (savedToken && savedUser) {
         try {
-          console.log('Found saved credentials, verifying token...');
+          console.log('Found saved credentials, setting state...');
           setToken(savedToken);
           setUser(JSON.parse(savedUser));
           
-          // Verify token is still valid
-          await authApi.verify();
-          console.log('Token verification successful');
+          // Don't verify token immediately to avoid rate limiting
+          // Let the first API call handle verification
+          console.log('Token set from saved credentials');
         } catch (error) {
           // Token is invalid, clear everything
-          console.warn('Token verification failed, clearing saved credentials:', error);
+          console.warn('Error parsing saved credentials, clearing:', error);
           Cookies.remove('token');
           Cookies.remove('user');
           setToken(null);

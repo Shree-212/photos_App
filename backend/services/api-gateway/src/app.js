@@ -370,12 +370,12 @@ const createExpressProxy = (target, circuitBreaker = null) => {
         newPath = '/auth' + req.url;
       }
       
-      // For task service, req.url is already stripped, just add /tasks prefix
-      if (req.originalUrl.startsWith('/api/tasks')) {
-        newPath = '/tasks' + req.url;
+      // For album service, req.url is already stripped, just add /albums prefix
+      if (req.originalUrl.startsWith('/api/albums')) {
+        newPath = '/albums' + req.url;
         // Handle root path case
-        if (newPath === '/tasks/') {
-          newPath = '/tasks';
+        if (newPath === '/albums/') {
+          newPath = '/albums';
         }
       }
       
@@ -539,7 +539,7 @@ app.use('/api/auth',
 );
 
 // Task service routes with different proxy strategies
-app.use('/api/tasks',
+app.use('/api/albums',
   withCircuitBreaker(taskCircuitBreaker, 'task-service'),
   (req, res, next) => {
     if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
@@ -561,7 +561,7 @@ app.use('/api/tasks',
       });
       
       return createEnhancedProxy(services.task, {
-        '^/api/tasks': '/tasks'
+        '^/api/albums': '/albums'
       }, taskCircuitBreaker)(req, res, next);
     }
   }
@@ -752,7 +752,7 @@ app.get('/api/proxy-info', (req, res) => {
         'POST/PUT/PATCH requests': 'express-http-proxy',
         reason: 'express-http-proxy handles request bodies better'
       },
-      '/api/tasks': {
+      '/api/albums': {
         'GET requests': 'http-proxy-middleware', 
         'POST/PUT/PATCH requests': 'express-http-proxy',
         reason: 'express-http-proxy handles request bodies better'
@@ -797,18 +797,18 @@ app.get('/api', (req, res) => {
         ]
       },
       tasks: {
-        base: '/api/tasks',
+        base: '/api/albums',
         service: services.task,
         routes: [
-          'GET /api/tasks',
-          'POST /api/tasks',
-          'GET /api/tasks/:id',
-          'PUT /api/tasks/:id',
-          'DELETE /api/tasks/:id',
-          'POST /api/tasks/:id/media',
-          'DELETE /api/tasks/:id/media/:mediaId',
-          'GET /api/tasks/:id/media',
-          'GET /api/tasks/stats/summary'
+          'GET /api/albums',
+          'POST /api/albums',
+          'GET /api/albums/:id',
+          'PUT /api/albums/:id',
+          'DELETE /api/albums/:id',
+          'POST /api/albums/:id/media',
+          'DELETE /api/albums/:id/media/:mediaId',
+          'GET /api/albums/:id/media',
+          'GET /api/albums/stats/summary'
         ]
       },
       media: {
@@ -881,7 +881,7 @@ app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
     message: `The requested endpoint ${req.method} ${req.originalUrl} was not found`,
-    availableEndpoints: ['/api/auth/*', '/api/tasks/*', '/api/media/*', '/api/notifications/*', '/media/*', '/health', '/api'],
+    availableEndpoints: ['/api/auth/*', '/api/albums/*', '/api/media/*', '/api/notifications/*', '/media/*', '/health', '/api'],
     timestamp: new Date().toISOString()
   });
 });

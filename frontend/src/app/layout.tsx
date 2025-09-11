@@ -7,8 +7,8 @@ import { Toaster } from 'react-hot-toast'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Task Manager',
-  description: 'A modern task management application built with microservices',
+  title: 'Photo Albums',
+  description: 'A modern photo album and media management application',
 }
 
 export default function RootLayout({
