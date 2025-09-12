@@ -2,12 +2,12 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  namespace: photo-albums
+  namespace: task-manager
   labels:
     app: frontend
     version: v1
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: frontend
@@ -21,24 +21,23 @@ spec:
       - name: frontend
         image: gcr.io/circular-hash-459513-q5/frontend:latest
         ports:
-        - containerPort: 3000
+        - containerPort: 80
           name: http
         env:
         - name: NODE_ENV
           value: "production"
-        - name: NEXT_PUBLIC_API_BASE_URL
-          value: "https://api.your-domain.com"
+        # No need for NEXT_PUBLIC_API_BASE_URL since we're using rewrites
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "200m"
+            memory: "128Mi"
+            cpu: "25m"
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            memory: "256Mi"
+            cpu: "50m"
         livenessProbe:
           httpGet:
             path: /
-            port: 3000
+            port: 80
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
@@ -46,7 +45,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /
-            port: 3000
+            port: 80
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 3
@@ -65,7 +64,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: frontend
-  namespace: photo-albums
+  namespace: task-manager
   labels:
     app: frontend
 spec:
@@ -73,58 +72,24 @@ spec:
     app: frontend
   ports:
   - port: 80
-    targetPort: 3000
+    targetPort: 80
     protocol: TCP
     name: http
-  type: ClusterIP
-
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: frontend-ingress
-  namespace: photo-albums
-  annotations:
-    kubernetes.io/ingress.class: "gce"
-    kubernetes.io/ingress.global-static-ip-name: "frontend-ip"
-    networking.gke.io/managed-certificates: "frontend-ssl-cert"
-    kubernetes.io/ingress.allow-http: "false"
-spec:
-  rules:
-  - host: your-domain.com
-    http:
-      paths:
-      - path: /*
-        pathType: ImplementationSpecific
-        backend:
-          service:
-            name: frontend
-            port:
-              number: 80
-
----
-apiVersion: networking.gke.io/v1
-kind: ManagedCertificate
-metadata:
-  name: frontend-ssl-cert
-  namespace: photo-albums
-spec:
-  domains:
-    - your-domain.com
+  type: LoadBalancer
 
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: frontend-hpa
-  namespace: photo-albums
+  namespace: task-manager
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: frontend
-  minReplicas: 3
-  maxReplicas: 10
+  minReplicas: 1
+  maxReplicas: 5
   metrics:
   - type: Resource
     resource:
@@ -132,9 +97,3 @@ spec:
       target:
         type: Utilization
         averageUtilization: 70
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: 80

@@ -101,7 +101,7 @@ if (process.env.USE_LOCAL_STORAGE !== 'true') {
     keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
   });
 
-  bucket = storage.bucket(process.env.GOOGLE_CLOUD_STORAGE_BUCKET || 'taskmanager-media');
+  bucket = storage.bucket(process.env.GCS_BUCKET || 'taskmanager-media-circular-hash-459513-q5');
 
   // Pub/Sub client (only for GCS mode)
   pubsub = new PubSub({
@@ -169,25 +169,40 @@ app.use(promMiddleware({
   collectGCMetrics: true,
 }));
 
-// Body parsing middleware with increased limits for large files
-app.use(express.json({ limit: '600mb' }));
-app.use(express.urlencoded({ extended: true, limit: '600mb' }));
+// Body parsing middleware with optimized limits for large files
+app.use(express.json({ limit: '50mb', extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '50mb', parameterLimit: 50000 }));
 
-// Increase request timeout for large file uploads
+// Increase request timeout for large file uploads with better error handling
 app.use((req, res, next) => {
-  // Set timeout to 10 minutes for upload endpoints
+  // Set timeout to 5 minutes for upload endpoints (more reasonable)
   if (req.path.includes('/upload')) {
-    req.setTimeout(600000); // 10 minutes
-    res.setTimeout(600000); // 10 minutes
+    req.setTimeout(300000); // 5 minutes
+    res.setTimeout(300000); // 5 minutes
+    
+    // Add error handlers for timeouts
+    req.on('timeout', () => {
+      logger.error('Request timeout during upload', { path: req.path, ip: req.ip });
+      if (!res.headersSent) {
+        res.status(408).json({ error: 'Request timeout - file too large or connection too slow' });
+      }
+    });
+    
+    res.on('timeout', () => {
+      logger.error('Response timeout during upload', { path: req.path, ip: req.ip });
+    });
   }
   next();
 });
 
-// Multer configuration for file uploads
+// Multer configuration for file uploads with optimized settings
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 500 * 1024 * 1024, // 500MB limit for large video files
+    fileSize: 50 * 1024 * 1024, // Reduced to 50MB for better memory management
+    fieldSize: 50 * 1024 * 1024, // Ensure field size matches
+    files: 1, // Limit to single file upload
+    parts: 10 // Limit multipart parts
   },
   fileFilter: (req, file, cb) => {
     // Allow image and video files
@@ -199,12 +214,17 @@ const upload = multer({
   }
 });
 
-// Authentication middleware
+// Authentication middleware with improved error handling
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
+    logger.warn('Authentication failed: No token provided', { 
+      ip: req.ip, 
+      userAgent: req.get('User-Agent'),
+      path: req.path
+    });
     return res.status(401).json({ error: 'Access token required' });
   }
 
@@ -215,7 +235,7 @@ const authenticateToken = async (req, res, next) => {
     
     const response = await axios.post(authUrl, {}, {
       headers: { authorization: `Bearer ${token}` },
-      timeout: 5000
+      timeout: 10000 // Increased timeout for auth
     });
     
     logger.info('Auth response received:', { status: response.status, data: response.data });
@@ -228,13 +248,31 @@ const authenticateToken = async (req, res, next) => {
       statusText: error.response?.statusText,
       data: error.response?.data,
       code: error.code,
+      ip: req.ip,
+      path: req.path,
       config: {
         url: error.config?.url,
         method: error.config?.method,
-        headers: error.config?.headers
+        timeout: error.config?.timeout
       }
     });
-    return res.status(403).json({ error: 'Invalid token' });
+    
+    // Determine appropriate status code based on error
+    let statusCode = 403;
+    let errorMessage = 'Invalid token';
+    
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+      statusCode = 503;
+      errorMessage = 'Authentication service unavailable';
+    } else if (error.code === 'ECONNABORTED') {
+      statusCode = 504;
+      errorMessage = 'Authentication timeout';
+    } else if (error.response?.status === 401) {
+      statusCode = 401;
+      errorMessage = 'Token expired or invalid';
+    }
+    
+    return res.status(statusCode).json({ error: errorMessage });
   }
 };
 
@@ -313,20 +351,38 @@ app.get('/metrics', (req, res) => {
   res.end(register.metrics());
 });
 
-// Upload media file
+// Upload media file with enhanced error handling
 app.post('/media/upload', authenticateToken, upload.single('file'), async (req, res) => {
   const startTime = Date.now();
   
   try {
     if (!req.file) {
       uploadCounter.labels('error', 'none').inc();
+      logger.warn('Upload failed: No file provided', { 
+        userId: req.user?.id,
+        ip: req.ip 
+      });
       return res.status(400).json({ error: 'No file uploaded' });
     }
+
+    // Log upload attempt
+    logger.info('Upload attempt started:', {
+      userId: req.user.id,
+      originalName: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      ip: req.ip
+    });
 
     // Validate request body
     const { error, value } = uploadSchema.validate(req.body);
     if (error) {
       uploadCounter.labels('error', req.file.mimetype).inc();
+      logger.warn('Upload validation failed:', { 
+        error: error.details[0].message,
+        userId: req.user.id,
+        file: req.file.originalname
+      });
       return res.status(400).json({ error: error.details[0].message });
     }
 
@@ -341,13 +397,27 @@ app.post('/media/upload', authenticateToken, upload.single('file'), async (req, 
       mimetype: req.file.mimetype,
       fileExtension,
       filename,
-      size: req.file.size
+      size: req.file.size,
+      userId: req.user.id
     });
     
     // Optimize image if requested
     let fileBuffer = req.file.buffer;
     if (optimize && req.file.mimetype.startsWith('image/')) {
-      fileBuffer = await optimizeImage(req.file.buffer, { quality, width, height });
+      try {
+        fileBuffer = await optimizeImage(req.file.buffer, { quality, width, height });
+        logger.info('Image optimization completed:', { 
+          originalSize: req.file.size,
+          optimizedSize: fileBuffer.length,
+          reduction: ((req.file.size - fileBuffer.length) / req.file.size * 100).toFixed(2) + '%'
+        });
+      } catch (optimizeError) {
+        logger.warn('Image optimization failed, using original:', { 
+          error: optimizeError.message,
+          filename 
+        });
+        fileBuffer = req.file.buffer;
+      }
     }
 
     let filePath;
@@ -371,7 +441,7 @@ app.post('/media/upload', authenticateToken, upload.single('file'), async (req, 
       const gcsPath = `media/${req.user.id}/${filename}`;
       const file = bucket.file(gcsPath);
       
-      // Configure upload options
+      // Configure upload options with better error handling
       const uploadOptions = {
         metadata: {
           contentType: req.file.mimetype,
@@ -381,19 +451,32 @@ app.post('/media/upload', authenticateToken, upload.single('file'), async (req, 
             uploadedAt: new Date().toISOString()
           }
         },
-        // Enable resumable uploads for large files
-        resumable: req.file.size > 10 * 1024 * 1024 // Use resumable for files > 10MB
+        // Always use resumable uploads for better reliability
+        resumable: true,
+        // Add validation to prevent data corruption
+        validation: 'crc32c'
       };
 
       const stream = file.createWriteStream(uploadOptions);
 
       await new Promise((resolve, reject) => {
+        let uploadComplete = false;
+        
         stream.on('error', (error) => {
-          logger.error('GCS upload stream error:', error);
-          reject(error);
+          if (!uploadComplete) {
+            logger.error('GCS upload stream error:', { 
+              error: error.message,
+              code: error.code,
+              filename,
+              gcsPath,
+              fileSize: fileBuffer.length
+            });
+            reject(new Error(`GCS upload failed: ${error.message}`));
+          }
         });
         
         stream.on('finish', () => {
+          uploadComplete = true;
           logger.info('GCS upload completed successfully', { 
             filename, 
             size: fileBuffer.length,
@@ -402,31 +485,89 @@ app.post('/media/upload', authenticateToken, upload.single('file'), async (req, 
           resolve(null);
         });
         
-        // Write the buffer to the stream
-        stream.end(fileBuffer);
+        // Write the buffer to the stream in chunks for large files
+        if (fileBuffer.length > 10 * 1024 * 1024) { // 10MB+
+          const chunkSize = 1024 * 1024; // 1MB chunks
+          let offset = 0;
+          
+          const writeChunk = () => {
+            if (offset >= fileBuffer.length) {
+              stream.end();
+              return;
+            }
+            
+            const chunk = fileBuffer.slice(offset, Math.min(offset + chunkSize, fileBuffer.length));
+            const canContinue = stream.write(chunk);
+            offset += chunk.length;
+            
+            if (canContinue) {
+              setImmediate(writeChunk);
+            } else {
+              stream.once('drain', writeChunk);
+            }
+          };
+          
+          writeChunk();
+        } else {
+          // For smaller files, write directly
+          stream.end(fileBuffer);
+        }
       });
       
       storageUrl = gcsPath;
     }
 
-    // Save metadata to database
-    const result = await pool.query(`
-      INSERT INTO media (
-        filename, original_name, mime_type, size_bytes, 
-        ${process.env.USE_LOCAL_STORAGE === 'true' ? 'local_path' : 'gcs_path'}, 
-        user_id, metadata, is_public
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING *
-    `, [
-      filename,
-      req.file.originalname,
-      req.file.mimetype,
-      fileBuffer.length,
-      storageUrl,
-      req.user.id,
-      JSON.stringify(metadata),
-      isPublic
-    ]);
+    // Save metadata to database with error handling
+    let result;
+    try {
+      result = await pool.query(`
+        INSERT INTO media (
+          filename, original_name, mime_type, size_bytes, 
+          ${process.env.USE_LOCAL_STORAGE === 'true' ? 'local_path' : 'gcs_path'}, 
+          user_id, metadata, is_public
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+      `, [
+        filename,
+        req.file.originalname,
+        req.file.mimetype,
+        fileBuffer.length,
+        storageUrl,
+        req.user.id,
+        JSON.stringify(metadata),
+        isPublic
+      ]);
+      
+      logger.info('Database record created:', { 
+        mediaId: result.rows[0].id,
+        filename,
+        userId: req.user.id
+      });
+    } catch (dbError) {
+      logger.error('Database insertion failed:', {
+        error: dbError.message,
+        code: dbError.code,
+        detail: dbError.detail,
+        filename,
+        userId: req.user.id
+      });
+      
+      // Try to clean up uploaded file if database fails
+      if (process.env.USE_LOCAL_STORAGE !== 'true' && storageUrl) {
+        try {
+          const file = bucket.file(storageUrl);
+          await file.delete();
+          logger.info('Cleaned up orphaned file after database error:', { storageUrl });
+        } catch (cleanupError) {
+          logger.warn('Failed to cleanup orphaned file:', { 
+            storageUrl, 
+            error: cleanupError.message 
+          });
+        }
+      }
+      
+      throw new Error('Database error: ' + dbError.message);
+    }
 
     const mediaFile = result.rows[0];
 
@@ -475,13 +616,43 @@ app.post('/media/upload', authenticateToken, upload.single('file'), async (req, 
 
   } catch (error) {
     uploadCounter.labels('error', req.file?.mimetype || 'unknown').inc();
+    
+    // Enhanced error logging with context
     logger.error('Upload failed:', { 
       message: error.message, 
       stack: error.stack,
       code: error.code,
-      details: error
+      userId: req.user?.id,
+      filename: req.file?.originalname,
+      fileSize: req.file?.size,
+      mimetype: req.file?.mimetype,
+      duration: Date.now() - startTime,
+      ip: req.ip,
+      userAgent: req.get('User-Agent')
     });
-    res.status(500).json({ error: 'Upload failed: ' + error.message });
+    
+    // Determine appropriate error response
+    let statusCode = 500;
+    let errorMessage = 'Upload failed';
+    
+    if (error.message.includes('File too large')) {
+      statusCode = 413;
+      errorMessage = 'File too large - maximum size is 50MB';
+    } else if (error.message.includes('GCS upload failed')) {
+      statusCode = 502;
+      errorMessage = 'Storage service error - please try again';
+    } else if (error.message.includes('Database error')) {
+      statusCode = 500;
+      errorMessage = 'Database error - please try again';
+    } else if (error.message.includes('timeout')) {
+      statusCode = 408;
+      errorMessage = 'Upload timeout - file may be too large or connection too slow';
+    }
+    
+    res.status(statusCode).json({ 
+      error: errorMessage,
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
@@ -653,7 +824,15 @@ app.get('/media/:id/thumbnail', authenticateToken, async (req, res) => {
         const file = bucket.file(mediaFile.gcs_path);
         [fileBuffer] = await file.download();
       } catch (gcsError) {
-        logger.error('GCS file download failed:', gcsError.message);
+        logger.error('GCS file download failed:', {
+          error: gcsError.message,
+          code: gcsError.code,
+          bucket: process.env.GCS_BUCKET || 'taskmanager-media-circular-hash-459513-q5',
+          path: mediaFile.gcs_path,
+          mediaId: mediaFile.id,
+          fileName: mediaFile.filename,
+          timestamp: new Date().toISOString()
+        });
         return res.status(404).json({ error: 'File not found in storage' });
       }
     }
@@ -841,6 +1020,68 @@ app.delete('/media/:id', authenticateToken, async (req, res) => {
     await client.query('ROLLBACK');
     logger.error('Delete media failed:', error.message);
     res.status(500).json({ error: 'Failed to delete media file' });
+  } finally {
+    client.release();
+  }
+});
+
+// Admin endpoint to fix GCS paths
+app.post('/admin/fix-gcs-paths', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    // Get all media files
+    const result = await client.query('SELECT id, filename, gcs_path, user_id FROM media ORDER BY id');
+    const mediaFiles = result.rows;
+    
+    const fixes = [];
+    
+    for (const media of mediaFiles) {
+      const expectedPath = `media/${media.user_id}/${media.filename}`;
+      
+      // Check if file exists at the expected path
+      const expectedFile = bucket.file(expectedPath);
+      const [expectedExists] = await expectedFile.exists();
+      
+      if (expectedExists && media.gcs_path !== expectedPath) {
+        // Update the database with the correct path
+        await client.query(
+          'UPDATE media SET gcs_path = $1 WHERE id = $2',
+          [expectedPath, media.id]
+        );
+        
+        fixes.push({
+          id: media.id,
+          filename: media.filename,
+          oldPath: media.gcs_path,
+          newPath: expectedPath
+        });
+      } else if (!expectedExists) {
+        // File doesn't exist at expected location, check current path
+        const currentFile = bucket.file(media.gcs_path);
+        const [currentExists] = await currentFile.exists();
+        
+        if (!currentExists) {
+          fixes.push({
+            id: media.id,
+            filename: media.filename,
+            currentPath: media.gcs_path,
+            status: 'FILE_NOT_FOUND'
+          });
+        }
+      }
+    }
+    
+    res.json({
+      message: 'GCS path fix completed',
+      totalFiles: mediaFiles.length,
+      fixesApplied: fixes.filter(f => f.newPath).length,
+      missingFiles: fixes.filter(f => f.status === 'FILE_NOT_FOUND').length,
+      fixes: fixes
+    });
+    
+  } catch (error) {
+    logger.error('Fix GCS paths failed:', error.message);
+    res.status(500).json({ error: 'Failed to fix GCS paths' });
   } finally {
     client.release();
   }

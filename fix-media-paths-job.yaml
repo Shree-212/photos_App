@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fix-media-paths-job
+  namespace: task-manager
+spec:
+  template:
+    spec:
+      containers:
+      - name: postgres-client
+        image: postgres:13
+        command: ["psql"]
+        args: 
+          - "-h"
+          - "34.122.121.162"
+          - "-U"
+          - "taskuser"
+          - "-d"
+          - "taskmanager"
+          - "-c"
+          - "UPDATE media SET gcs_path = CONCAT('media/4/', filename) WHERE user_id = 4 AND gcs_path NOT LIKE 'media/4/%'; SELECT id, filename, gcs_path FROM media WHERE user_id = 4 ORDER BY id;"
+        env:
+        - name: PGPASSWORD
+          value: "Shree@2025"
+      restartPolicy: Never
+  backoffLimit: 4

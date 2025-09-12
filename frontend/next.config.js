@@ -8,6 +8,15 @@ const nextConfig = {
   env: {
     API_BASE_URL: process.env.API_BASE_URL || '',
   },
+  // Configure for large file uploads
+  experimental: {
+    isrMemoryCacheSize: 0, // Disable ISR cache for large files
+  },
+  // Increase body size limits for file uploads
+  serverRuntimeConfig: {
+    // Will only be available on the server side
+    bodySizeLimit: '600mb',
+  },
   async rewrites() {
     return [
       {

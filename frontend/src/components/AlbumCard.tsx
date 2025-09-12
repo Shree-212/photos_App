@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Album } from '../types';
 import { format, formatDistanceToNow } from 'date-fns';
 import { MediaCarousel } from './MediaCarousel';
+import { AuthenticatedImage } from './AuthenticatedImage';
 
 interface AlbumCardProps {
   album: Album;
@@ -118,10 +119,11 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
       {/* Album Cover/Preview */}
       <div className="aspect-video bg-gradient-to-br from-blue-50 to-indigo-100 rounded-t-lg overflow-hidden relative">
         {firstImage ? (
-          <img
+          <AuthenticatedImage
             src={firstImage.thumbnailUrl || `/api/media/${firstImage.id}/thumbnail`}
             alt={album.title}
             className="w-full h-full object-cover"
+            fill
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Album, CreateAlbumData, UpdateAlbumData, MediaFile } from '../types';
 import { albumApi } from '../lib/albums';
 import { MediaManager } from './MediaManager';
+import { AuthenticatedImage } from './AuthenticatedImage';
 
 interface AlbumFormProps {
   album?: Album | null;
@@ -261,10 +262,11 @@ export const AlbumForm: React.FC<AlbumFormProps> = ({
                 <div key={media.id} className="relative group">
                   <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border border-gray-200">
                     {media.mimeType.startsWith('image/') ? (
-                      <img
+                      <AuthenticatedImage
                         src={media.thumbnailUrl || `/api/media/${media.id}/thumbnail`}
                         alt={media.originalName}
                         className="w-full h-full object-cover"
+                        fill
                       />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center bg-gray-800 text-white">

@@ -17,6 +17,9 @@ require('dotenv').config();
 
 const app = express();
 
+// Trust proxy for X-Forwarded-For headers in Kubernetes
+app.set('trust proxy', true);
+
 // Prometheus metrics
 const register = new promClient.Registry();
 promClient.collectDefaultMetrics({ register });
