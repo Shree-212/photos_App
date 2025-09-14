@@ -171,6 +171,9 @@ resource "google_container_cluster" "photo_albums" {
   network    = google_compute_network.vpc.name
   subnetwork = google_compute_subnetwork.subnet.name
 
+  # Allow deletion for cleanup
+  deletion_protection = false
+
   # Workload Identity
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
@@ -260,6 +263,7 @@ resource "google_storage_bucket" "media" {
   storage_class = "STANDARD"
 
   uniform_bucket_level_access = true
+  force_destroy = true  # Allow forced destruction with objects
 
   cors {
     origin          = ["*"]  # Allow from any origin for testing

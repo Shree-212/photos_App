@@ -1,0 +1,42 @@
+# Terraform Variables Template
+# Copy this file to terraform.tfvars and fill in your values
+
+# GCP Project Configuration
+project_id = "your-gcp-project-id"  # Replace with your actual project ID
+region     = "us-central1"          # Change if you prefer a different region
+zone       = "us-central1-a"        # Change if you prefer a different zone
+
+# Application Configuration
+app_name    = "taskmanager"
+environment = "prod"                # Options: dev, staging, prod
+
+# Domain Configuration (optional)
+domain_name = "taskmanager.example.com"  # Replace with your actual domain
+
+# Database Configuration
+db_name     = "taskmanager"
+db_user     = "taskuser"
+db_password = "your-secure-password-here"  # Replace with a strong password
+
+# Storage Configuration
+storage_bucket_name = "taskmanager-media-your-project-id"  # Must be globally unique
+
+# Cluster Configuration
+gke_num_nodes    = 1           # Start with 1 node to save costs
+gke_machine_type = "e2-medium" # Options: e2-micro, e2-small, e2-medium, e2-standard-2
+gke_disk_size_gb = 20          # GB of disk space per node
+
+# Safety Configuration
+enable_deletion_protection = false  # Set to true for production
+enable_backup             = true    # Enable automated backups
+
+# Cost Optimization Options:
+# For development/testing:
+# - gke_machine_type = "e2-micro" (saves ~$30/month)
+# - gke_num_nodes = 1
+# - enable_deletion_protection = false
+#
+# For production:
+# - gke_machine_type = "e2-medium" or larger
+# - gke_num_nodes = 2 or more
+# - enable_deletion_protection = true
