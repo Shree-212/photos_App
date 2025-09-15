@@ -1,0 +1,36 @@
+flowchart TD
+    Frontend[Next.js Frontend<br/>:3100] --> Gateway[API Gateway<br/>:3000]
+    
+    Gateway --> Auth[Auth Service<br/>:3001]
+    Gateway --> Task[Task Service<br/>:3002]
+    Gateway --> Media[Media Service<br/>:3003]
+    
+    Auth --> DB[(PostgreSQL<br/>:5432)]
+    Task --> DB
+    Media --> DB
+    
+    Auth --> Cache[(Redis<br/>:6379)]
+    Task --> Cache
+    Media --> Cache
+    
+    Task --> Media
+    Media --> GCS[Google Cloud Storage]
+    
+    Task --> PubSub[Pub/Sub Emulator<br/>:8085]
+    Media --> PubSub
+    
+    subgraph "Microservices Layer"
+        Auth
+        Task
+        Media
+    end
+    
+    subgraph "Data Layer"
+        DB
+        Cache
+        GCS
+    end
+    
+    subgraph "Messaging"
+        PubSub
+    end

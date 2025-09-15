@@ -1,0 +1,36 @@
+architecture-beta
+    group frontend(cloud)[Frontend Layer] 
+    group gateway(cloud)[Gateway Layer]
+    group services(cloud)[Services Layer]
+    group data(database)[Data Layer]
+    
+    service reactapp(server)[NextJS Frontend] in frontend
+    service apigateway(internet)[API Gateway] in gateway
+    
+    service auth(server)[Auth Service] in services
+    service task(server)[Task Service] in services
+    service media(server)[Media Service] in services
+    service notification(server)[Notification Service] in services
+    
+    service postgres(database)[PostgreSQL] in data
+    service redis(disk)[Redis Cache] in data
+    service pubsub(server)[PubSub Emulator] in data
+    
+    reactapp:B --> T:apigateway
+    apigateway:B --> T:auth
+    apigateway:B --> T:task  
+    apigateway:B --> T:media
+    apigateway:B --> T:notification
+    
+    auth:B --> T:postgres
+    task:B --> T:postgres
+    media:B --> T:postgres
+    notification:B --> T:postgres
+    
+    auth:B --> T:redis
+    task:B --> T:redis
+    media:B --> T:redis
+    
+    task:B --> T:pubsub
+    media:B --> T:pubsub
+    notification:B --> T:pubsub
