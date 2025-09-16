@@ -31,6 +31,7 @@ const {
 } = require('../lib/monitoring');
 
 const { SimpleTracingManager } = require('../lib/simple-tracing');
+const FirebaseAuthService = require('./services/firebaseAuthService');
 
 require('dotenv').config();
 
@@ -58,6 +59,24 @@ const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // limit each IP to 5 requests per windowMs
   message: 'Too many authentication attempts from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Stricter rate limiter for OTP endpoints
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 3, // limit each IP to 3 OTP requests per windowMs
+  message: 'Too many OTP requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Very strict rate limiter for OTP verification
+const otpVerifyLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 10, // limit each IP to 10 verification attempts per 5 minutes
+  message: 'Too many OTP verification attempts from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -99,6 +118,18 @@ const logger = winston.createLogger({
 
 // Initialize tracing manager after logger is defined
 const tracingManager = new SimpleTracingManager('auth-service', logger);
+
+// Initialize Firebase Auth service (100% GCP native)
+const firebaseAuthService = new FirebaseAuthService(logger, pool);
+
+// Schedule verification session cleanup every hour
+setInterval(async () => {
+  try {
+    await firebaseAuthService.cleanup();
+  } catch (error) {
+    logger.error('Firebase auth cleanup error:', error);
+  }
+}, 60 * 60 * 1000); // 1 hour
 
 // Middleware with fallbacks
 app.use(securityHeaders || helmet());
@@ -269,6 +300,27 @@ const registerSchema = Joi.object({
 const loginSchema = Joi.object({
   email: Joi.string().email().max(255).required(),
   password: Joi.string().required()
+});
+
+// Mobile auth validation schemas
+const phoneSchema = Joi.object({
+  phoneNumber: Joi.string().min(10).max(20).required(),
+  countryCode: Joi.string().length(2).default('US').optional()
+});
+
+const verifyOTPSchema = Joi.object({
+  phoneNumber: Joi.string().min(10).max(20).required(),
+  otpCode: Joi.string().length(6).pattern(/^\d{6}$/).required(),
+  countryCode: Joi.string().length(2).default('US').optional()
+});
+
+const registerMobileSchema = Joi.object({
+  phoneNumber: Joi.string().min(10).max(20).required(),
+  otpCode: Joi.string().length(6).pattern(/^\d{6}$/).required(),
+  firstName: Joi.string().min(2).max(50).pattern(/^[a-zA-Z\s]+$/).required(),
+  lastName: Joi.string().min(2).max(50).pattern(/^[a-zA-Z\s]+$/).required(),
+  email: Joi.string().email().max(255).optional(),
+  countryCode: Joi.string().length(2).default('US').optional()
 });
 
 // Helper functions with fallbacks
@@ -501,6 +553,319 @@ app.get('/ready', async (req, res) => {
     });
   }
 });
+
+// Mobile Authentication Endpoints (Firebase-powered)
+
+// Send phone verification (Firebase handles SMS)
+app.post('/auth/send-phone-verification', otpLimiter, async (req, res) => {
+  try {
+    // Validate input
+    const { error, value } = phoneSchema.validate(req.body);
+    if (error) {
+      logAudit(req, false, 'validation_failed');
+      return res.status(400).json({ 
+        error: 'Validation failed', 
+        details: error.details.map(d => d.message)
+      });
+    }
+
+    const { phoneNumber, countryCode = 'US' } = value;
+    const clientIP = req.ip || req.connection.remoteAddress;
+    
+    // Initiate phone verification via Firebase (100% GCP native)
+    const result = await firebaseAuthService.initiatePhoneVerification(phoneNumber, clientIP);
+    
+    if (result.success) {
+      authAttempts.labels('send_phone_verification', 'success').inc();
+      logger.info('Phone verification initiated via Firebase', { phoneNumber, ip: clientIP });
+      
+      res.json({
+        success: true,
+        message: result.message,
+        sessionId: result.sessionId, // Firebase verification ID
+        expiresAt: result.expiresAt,
+        remainingAttempts: result.remainingAttempts
+      });
+    } else {
+      authAttempts.labels('send_phone_verification', result.rateLimited ? 'rate_limited' : 'failed').inc();
+      logAudit(req, false, result.rateLimited ? 'rate_limited' : 'send_verification_failed');
+      
+      const statusCode = result.rateLimited ? 429 : 400;
+      res.status(statusCode).json({
+        success: false,
+        error: result.error,
+        ...(result.resetTime && { resetTime: result.resetTime })
+      });
+    }
+  } catch (error) {
+    authAttempts.labels('send_phone_verification', 'error').inc();
+    logAudit(req, false, 'server_error');
+    logger.error('Send phone verification error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Verify phone and login with Firebase
+app.post('/auth/verify-phone', otpVerifyLimiter, async (req, res) => {
+  try {
+    // Validate input
+    const { error, value } = verifyOTPSchema.validate(req.body);
+    if (error) {
+      logAudit(req, false, 'validation_failed');
+      return res.status(400).json({ 
+        error: 'Validation failed', 
+        details: error.details.map(d => d.message)
+      });
+    }
+
+    const { phoneNumber, otpCode, countryCode = 'US' } = value;
+    const clientIP = req.ip || req.connection.remoteAddress;
+    
+    // Verify phone via Firebase
+    const result = await firebaseAuthService.verifyPhoneNumber(phoneNumber, otpCode, clientIP);
+    
+    if (result.success) {
+      // Generate JWT token for the authenticated user
+      const token = generateToken(result.user);
+      
+      // Cache token
+      await cacheUserToken(result.user.id, token);
+      
+      // Update metrics
+      authAttempts.labels('verify_phone', 'success').inc();
+      activeUsers.inc();
+      
+      logAudit(req, true, 'firebase_phone_login_success');
+      logger.info('User logged in via Firebase phone verification', { 
+        userId: result.user.id, 
+        phoneNumber: result.user.phoneNumber 
+      });
+      
+      res.json({
+        success: true,
+        message: 'Login successful',
+        token, // Your app's JWT token
+        firebaseToken: result.firebaseToken, // Firebase custom token for client
+        user: result.user
+      });
+    } else {
+      authAttempts.labels('verify_phone', result.rateLimited ? 'rate_limited' : 'invalid_verification').inc();
+      logAudit(req, false, result.rateLimited ? 'rate_limited' : 'invalid_verification');
+      
+      const statusCode = result.rateLimited ? 429 : 401;
+      res.status(statusCode).json({
+        success: false,
+        error: result.error,
+        ...(result.remainingAttempts !== undefined && { remainingAttempts: result.remainingAttempts })
+      });
+    }
+  } catch (error) {
+    authAttempts.labels('verify_phone', 'error').inc();
+    logAudit(req, false, 'server_error');
+    logger.error('Verify phone error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Register with phone number using Firebase
+app.post('/auth/register-phone', otpVerifyLimiter, async (req, res) => {
+  try {
+    // Validate input
+    const { error, value } = registerMobileSchema.validate(req.body);
+    if (error) {
+      logAudit(req, false, 'validation_failed');
+      return res.status(400).json({ 
+        error: 'Validation failed', 
+        details: error.details.map(d => d.message)
+      });
+    }
+
+    const { phoneNumber, otpCode, firstName, lastName, email, countryCode = 'US' } = value;
+    const clientIP = req.ip || req.connection.remoteAddress;
+    
+    // First verify the phone number via Firebase
+    const verificationResult = await firebaseAuthService.verifyPhoneNumber(phoneNumber, otpCode, clientIP);
+    
+    if (!verificationResult.success) {
+      authAttempts.labels('register_phone', 'invalid_verification').inc();
+      logAudit(req, false, 'invalid_verification');
+      return res.status(401).json({
+        success: false,
+        error: verificationResult.error,
+        ...(verificationResult.remainingAttempts !== undefined && { remainingAttempts: verificationResult.remainingAttempts })
+      });
+    }
+
+    // Sanitize inputs
+    const sanitizedFirstName = sanitizeInput(firstName, 50);
+    const sanitizedLastName = sanitizeInput(lastName, 50);
+    const sanitizedEmail = email ? sanitizeEmail(email) : null;
+    
+    // Get validated phone number from verification result
+    const validatedPhoneNumber = verificationResult.user.phoneNumber;
+    
+    // Check if user already has an email set (existing user)
+    if (verificationResult.user.email) {
+      // User already exists with email - just return the token
+      const token = generateToken(verificationResult.user);
+      await cacheUserToken(verificationResult.user.id, token);
+      
+      authAttempts.labels('register_phone', 'existing_user').inc();
+      logger.info('Existing user logged in with Firebase phone verification', { 
+        userId: verificationResult.user.id, 
+        phoneNumber: validatedPhoneNumber 
+      });
+      
+      return res.json({
+        success: true,
+        message: 'Login successful with existing account',
+        token,
+        firebaseToken: verificationResult.firebaseToken,
+        user: verificationResult.user
+      });
+    }
+    
+    // Check if email is already taken (if provided)
+    if (sanitizedEmail) {
+      const existingUser = await pool.query(
+        'SELECT id FROM users WHERE email = $1 AND id != $2',
+        [sanitizedEmail, verificationResult.user.id]
+      );
+      
+      if (existingUser.rows.length > 0) {
+        logAudit(req, false, 'email_exists');
+        return res.status(409).json({ 
+          error: 'Email already exists with another account' 
+        });
+      }
+    }
+    
+    // Update the user record with complete information
+    const updateResult = await pool.query(`
+      UPDATE users 
+      SET first_name = $1, 
+          last_name = $2, 
+          email = $3,
+          updated_at = NOW()
+      WHERE id = $4 
+      RETURNING id, email, first_name, last_name, phone_number, is_phone_verified, created_at
+    `, [sanitizedFirstName, sanitizedLastName, sanitizedEmail, verificationResult.user.id]);
+    
+    const updatedUser = updateResult.rows[0];
+    
+    // Generate token
+    const token = generateToken(updatedUser);
+    await cacheUserToken(updatedUser.id, token);
+    
+    // Log successful registration
+    authAttempts.labels('register_phone', 'success').inc();
+    logAudit(req, true, 'firebase_phone_registration_success');
+    logger.info('User registered successfully with Firebase phone verification', { 
+      userId: updatedUser.id, 
+      phoneNumber: validatedPhoneNumber,
+      email: sanitizedEmail 
+    });
+    
+    res.status(201).json({ 
+      success: true,
+      message: 'User registered successfully',
+      token,
+      firebaseToken: verificationResult.firebaseToken,
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        firstName: updatedUser.first_name,
+        lastName: updatedUser.last_name,
+        phoneNumber: updatedUser.phone_number,
+        isPhoneVerified: updatedUser.is_phone_verified,
+        createdAt: updatedUser.created_at
+      }
+    });
+  } catch (error) {
+    authAttempts.labels('register_phone', 'error').inc();
+    logAudit(req, false, 'server_error');
+    logger.error('Firebase phone registration error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Verify Firebase ID token endpoint
+app.post('/auth/verify-firebase-token', async (req, res) => {
+  try {
+    const { idToken } = req.body;
+    
+    if (!idToken) {
+      return res.status(400).json({ error: 'Firebase ID token required' });
+    }
+    
+    const result = await firebaseAuthService.verifyFirebaseToken(idToken);
+    
+    if (result.success) {
+      // Optionally sync with your local user database
+      res.json({
+        success: true,
+        firebase: {
+          uid: result.uid,
+          phoneNumber: result.phoneNumber,
+          email: result.email,
+          verified: result.verified
+        }
+      });
+    } else {
+      res.status(401).json({
+        success: false,
+        error: result.error
+      });
+    }
+  } catch (error) {
+    logger.error('Firebase token verification error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Check phone number availability endpoint
+app.post('/auth/check-phone', async (req, res) => {
+  try {
+    const { error, value } = phoneSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({ 
+        error: 'Validation failed', 
+        details: error.details.map(d => d.message)
+      });
+    }
+
+    const { phoneNumber, countryCode = 'US' } = value;
+    
+    // Validate and format phone number
+    const phoneValidation = firebaseAuthService.validatePhoneNumber(phoneNumber, countryCode);
+    if (!phoneValidation.valid) {
+      return res.status(400).json({ 
+        error: phoneValidation.error 
+      });
+    }
+    
+    // Check if phone number exists
+    const result = await pool.query(
+      'SELECT id, email, first_name, last_name, is_phone_verified FROM users WHERE phone_number = $1',
+      [phoneValidation.formatted]
+    );
+    
+    const exists = result.rows.length > 0;
+    const user = exists ? result.rows[0] : null;
+    
+    res.json({
+      phoneNumber: phoneValidation.formatted,
+      exists,
+      isRegistered: exists && user.email && user.first_name,
+      isPhoneVerified: exists ? user.is_phone_verified : false
+    });
+  } catch (error) {
+    logger.error('Check phone error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Traditional Email Authentication Endpoints
 
 // Register endpoint
 app.post('/auth/register', rateLimiters?.auth || authLimiter, async (req, res) => {
